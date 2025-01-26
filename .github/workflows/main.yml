@@ -787,8 +787,8 @@ env:
   REGISTRY: docker.io
   FRONTEND_IMAGE: jai3747/my-frontend-app
   BACKEND_IMAGE: jai3747/my-backend-app
-  FRONTEND_NEW_TAG: v9
-  BACKEND_NEW_TAG: v7
+  FRONTEND_NEW_TAG: v10
+  BACKEND_NEW_TAG: v8
 
 jobs:
   frontend-security:
