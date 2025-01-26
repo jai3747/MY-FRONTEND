@@ -1,0 +1,49 @@
+name: MY-FRONTEND Security Scan
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend-security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install Dependencies
+      run: npm ci
+
+    - name: Truffle Hog Secret Scanning
+      run: |
+        pip install trufflehog3
+        trufflehog3 . --output frontend-trufflehog.json || true
+
+    - name: Snyk Vulnerability Scan
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      run: |
+        npm install -g snyk
+        snyk test --all-projects --json-file-output=frontend-snyk-report.json || true
+
+    - name: Semgrep Code Analysis
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: auto
+        output: frontend-semgrep-results.json
+
+    - name: Upload Security Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-security-scans
+        path: |
+          frontend-trufflehog.json
+          frontend-snyk-report.json
+          frontend-semgrep-results.json
