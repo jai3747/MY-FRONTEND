@@ -771,12 +771,12 @@ on:
         description: 'Frontend image tag to use (if not building new)'
         required: false
         type: string
-        default: 'v9'
+        default: 'v11'
       backend_image_tag:
         description: 'Backend image tag to use (if not building new)'
         required: false
         type: string
-        default: 'v7'
+        default: 'v11'
   push:
     branches: [main]
   pull_request:
