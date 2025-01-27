@@ -13,12 +13,12 @@ on:
         description: 'Frontend image tag to use (if not building new)'
         required: false
         type: string
-        default: 'v13'
+        default: 'v14'
       backend_image_tag:
         description: 'Backend image tag to use (if not building new)'
         required: false
         type: string
-        default: 'v13'
+        default: 'v14'
   push:
     branches: [main]
   pull_request:
@@ -29,8 +29,8 @@ env:
   REGISTRY: docker.io
   FRONTEND_IMAGE: jai3747/my-frontend-app
   BACKEND_IMAGE: jai3747/my-backend-app
-  FRONTEND_NEW_TAG: v13
-  BACKEND_NEW_TAG: v13
+  FRONTEND_NEW_TAG: v14
+  BACKEND_NEW_TAG: v14
 
 jobs:
   frontend-security:
