@@ -1,3 +1,209 @@
+# # # # # # name: Security, Build & Deploy Pipeline
+
+# # # # # # on:
+# # # # # #   workflow_dispatch:
+# # # # # #   push:
+# # # # # #     branches: [main]
+# # # # # #   pull_request:
+# # # # # #     branches: [main]
+
+# # # # # # env:
+# # # # # #   NODE_OPTIONS: --openssl-legacy-provider
+# # # # # #   DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+# # # # # #   GKE_CLUSTER: cluster-1 
+# # # # # #   GKE_ZONE: asia-south1-a
+# # # # # #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+# # # # # #   K8S_PATH: DEPLOYEMENT/K8/k8.yaml
+
+# # # # # # jobs:
+# # # # # #   security-and-build:
+# # # # # #     runs-on: ubuntu-latest
+# # # # # #     strategy:
+# # # # # #       matrix:
+# # # # # #         component: [frontend, backend]
+# # # # # #         task: [snyk, semgrep, docker]
+# # # # # #       fail-fast: false
+    
+# # # # # #     steps:
+# # # # # #       - name: Checkout Main Repository
+# # # # # #         uses: actions/checkout@v4.1.1
+# # # # # #         with:
+# # # # # #           fetch-depth: 0
+
+# # # # # #       - name: Checkout Component Repository
+# # # # # #         uses: actions/checkout@v4.1.1
+# # # # # #         with:
+# # # # # #           repository: jai3747/MY-${{ matrix.component }}
+# # # # # #           path: MY-${{ matrix.component }}
+# # # # # #           fetch-depth: 0
+      
+# # # # # #       - name: Setup Node.js
+# # # # # #         if: matrix.task != 'docker'
+# # # # # #         uses: actions/setup-node@v4.0.2
+# # # # # #         with:
+# # # # # #           node-version: '18'
+# # # # # #           cache: 'npm'
+# # # # # #           cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
+
+# # # # # #       - name: Run Snyk Scan
+# # # # # #         if: matrix.task == 'snyk'
+# # # # # #         working-directory: MY-${{ matrix.component }}
+# # # # # #         run: |
+# # # # # #           npm ci || npm install
+# # # # # #           npm install -g snyk
+# # # # # #           snyk test --json > ../${{ matrix.component }}-snyk.json || true
+# # # # # #         env:
+# # # # # #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      
+# # # # # #       - name: Upload Snyk Results
+# # # # # #         if: matrix.task == 'snyk'
+# # # # # #         uses: actions/upload-artifact@v3
+# # # # # #         with:
+# # # # # #           name: ${{ matrix.component }}-snyk-results
+# # # # # #           path: ${{ matrix.component }}-snyk.json
+# # # # # #           retention-days: 5
+
+# # # # # #       - name: Run Semgrep Scan
+# # # # # #         if: matrix.task == 'semgrep'
+# # # # # #         uses: semgrep/semgrep-action@v1
+# # # # # #         with:
+# # # # # #           publishToken: ${{ secrets.SEMGREP_TOKEN }}
+# # # # # #           publishDeployment: 1
+# # # # # #           generateSarif: 1
+# # # # # #           output: ${{ matrix.component }}-semgrep.sarif
+
+# # # # # #       - name: Set up Docker Buildx
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: docker/setup-buildx-action@v3
+
+# # # # # #       - name: Login to DockerHub
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: docker/login-action@v3
+# # # # # #         with:
+# # # # # #           username: ${{ secrets.DOCKERHUB_USERNAME }}
+# # # # # #           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+# # # # # #       - name: Docker Build and Push
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: docker/build-push-action@v5
+# # # # # #         with:
+# # # # # #           context: MY-${{ matrix.component }}
+# # # # # #           push: true
+# # # # # #           tags: |
+# # # # # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# # # # # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
+# # # # # #           cache-from: type=gha
+# # # # # #           cache-to: type=gha,mode=max
+# # # # # #           provenance: false
+
+# # # # # #       - name: Run Trivy Scan
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: aquasecurity/trivy-action@master
+# # # # # #         with:
+# # # # # #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# # # # # #           format: 'sarif'
+# # # # # #           output: '${{ matrix.component }}-trivy-results.sarif'
+# # # # # #           severity: 'HIGH,CRITICAL'
+
+# # # # # #       - name: Create CodeQL Database
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: github/codeql-action/init@v3
+# # # # # #         with:
+# # # # # #           languages: javascript
+
+# # # # # #       - name: Upload Trivy Results
+# # # # # #         if: matrix.task == 'docker'
+# # # # # #         uses: github/codeql-action/upload-sarif@v3
+# # # # # #         with:
+# # # # # #           sarif_file: ${{ matrix.component }}-trivy-results.sarif
+# # # # # #           category: trivy-${{ matrix.component }}
+# # # # # #           ref: ${{ github.ref }}
+# # # # # #           sha: ${{ github.sha }}
+# # # # # #           wait-for-processing: true
+
+# # # # # #   deploy:
+# # # # # #     needs: security-and-build
+# # # # # #     runs-on: ubuntu-latest
+# # # # # #     environment: production
+# # # # # #     permissions:
+# # # # # #       contents: 'read'
+# # # # # #       id-token: 'write'
+
+# # # # # #     steps:
+# # # # # #       - name: Checkout Backend Repository
+# # # # # #         uses: actions/checkout@v4.1.1
+# # # # # #         with:
+# # # # # #           repository: jai3747/MY-BACKEND
+# # # # # #           path: MY-BACKEND
+# # # # # #           fetch-depth: 0
+
+# # # # # #       - name: Authenticate to Google Cloud
+# # # # # #         uses: google-github-actions/auth@v1
+# # # # # #         with:
+# # # # # #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+# # # # # #       - name: Set up Cloud SDK
+# # # # # #         uses: google-github-actions/setup-gcloud@v1
+# # # # # #         with:
+# # # # # #           version: '>= 363.0.0'
+# # # # # #           project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+# # # # # #       - name: Install kubectl
+# # # # # #         run: |
+# # # # # #           sudo apt-get update
+# # # # # #           sudo apt-get install -y kubectl
+# # # # # #           sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+
+# # # # # #       - name: Get GKE Credentials
+# # # # # #         run: |
+# # # # # #           gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
+# # # # # #             --zone ${{ env.GKE_ZONE }} \
+# # # # # #             --project ${{ secrets.GCP_PROJECT_ID }}
+      
+# # # # # #       - name: Deploy to GKE
+# # # # # #         working-directory: MY-BACKEND
+# # # # # #         run: |
+# # # # # #           # Create MongoDB secret
+# # # # # #           kubectl create secret generic mongodb-secret \
+# # # # # #             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
+# # # # # #             --dry-run=client -o yaml | kubectl apply -f -
+          
+# # # # # #           # Update and apply deployment
+# # # # # #           cd DEPLOYEMENT/K8
+# # # # # #           sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKERHUB_USERNAME }}|g" k8.yaml
+# # # # # #           sed -i "s|latest|${{ github.sha }}|g" k8.yaml
+          
+# # # # # #           kubectl apply -f k8.yaml
+          
+# # # # # #           echo "Waiting for deployments..."
+# # # # # #           kubectl rollout status deployment/frontend-deployment --timeout=300s
+# # # # # #           kubectl rollout status deployment/backend-deployment --timeout=300s
+          
+# # # # # #           echo "Current Status:"
+# # # # # #           kubectl get pods,svc,deployments
+
+# # # # # #   report:
+# # # # # #     needs: [security-and-build, deploy]
+# # # # # #     runs-on: ubuntu-latest
+# # # # # #     if: always()
+# # # # # #     steps:
+# # # # # #       - name: Generate Final Report
+# # # # # #         run: |
+# # # # # #           echo "# Pipeline Execution Report" >> $GITHUB_STEP_SUMMARY
+# # # # # #           echo "## Security & Build Status" >> $GITHUB_STEP_SUMMARY
+# # # # # #           echo "- Build & Security Checks: ${{ needs.security-and-build.result }}" >> $GITHUB_STEP_SUMMARY
+# # # # # #           echo "- Deployment Status: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          
+# # # # # #           if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+# # # # # #             echo "✅ Pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY
+# # # # # #           else
+# # # # # #             echo "❌ Pipeline completed with issues." >> $GITHUB_STEP_SUMMARY
+# # # # # #           fi
+
+# # # # # # permissions:
+# # # # # #   contents: read
+# # # # # #   security-events: write
+# # # # # #   id-token: write
 # # # # # name: Security, Build & Deploy Pipeline
 
 # # # # # on:
@@ -137,22 +343,21 @@
 # # # # #           path: MY-BACKEND
 # # # # #           fetch-depth: 0
 
-# # # # #       - name: Authenticate to Google Cloud
-# # # # #         uses: google-github-actions/auth@v1
-# # # # #         with:
-# # # # #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
-
-# # # # #       - name: Set up Cloud SDK
+# # # # #       - name: Setup gcloud CLI
 # # # # #         uses: google-github-actions/setup-gcloud@v1
 # # # # #         with:
-# # # # #           version: '>= 363.0.0'
 # # # # #           project_id: ${{ secrets.GCP_PROJECT_ID }}
-
+# # # # #           service_account_key: ${{ secrets.GCP_SA_KEY }}
+# # # # #           install_components: 'gke-gcloud-auth-plugin'
+          
+# # # # #       - name: Configure Docker for GCR
+# # # # #         run: |
+# # # # #           gcloud auth configure-docker
+          
 # # # # #       - name: Install kubectl
 # # # # #         run: |
 # # # # #           sudo apt-get update
 # # # # #           sudo apt-get install -y kubectl
-# # # # #           sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
 
 # # # # #       - name: Get GKE Credentials
 # # # # #         run: |
@@ -343,17 +548,24 @@
 # # # #           path: MY-BACKEND
 # # # #           fetch-depth: 0
 
-# # # #       - name: Setup gcloud CLI
-# # # #         uses: google-github-actions/setup-gcloud@v1
+# # # #       # New GCP Authentication Steps
+# # # #       - id: 'auth'
+# # # #         name: 'Authenticate to Google Cloud'
+# # # #         uses: 'google-github-actions/auth@v1'
 # # # #         with:
-# # # #           project_id: ${{ secrets.GCP_PROJECT_ID }}
-# # # #           service_account_key: ${{ secrets.GCP_SA_KEY }}
-# # # #           install_components: 'gke-gcloud-auth-plugin'
-          
-# # # #       - name: Configure Docker for GCR
+# # # #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
+# # # #           project_id: '${{ secrets.GCP_PROJECT_ID }}'
+
+# # # #       - name: 'Set up Cloud SDK'
+# # # #         uses: 'google-github-actions/setup-gcloud@v1'
+# # # #         with:
+# # # #           version: '>= 363.0.0'
+
+# # # #       - name: 'Install gke-gcloud-auth-plugin'
 # # # #         run: |
-# # # #           gcloud auth configure-docker
-          
+# # # #           gcloud components install gke-gcloud-auth-plugin
+# # # #           gcloud components update
+
 # # # #       - name: Install kubectl
 # # # #         run: |
 # # # #           sudo apt-get update
@@ -361,9 +573,9 @@
 
 # # # #       - name: Get GKE Credentials
 # # # #         run: |
-# # # #           gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
-# # # #             --zone ${{ env.GKE_ZONE }} \
-# # # #             --project ${{ secrets.GCP_PROJECT_ID }}
+# # # #           gcloud container clusters get-credentials "$GKE_CLUSTER" \
+# # # #             --zone "$GKE_ZONE" \
+# # # #             --project "$PROJECT_ID"
       
 # # # #       - name: Deploy to GKE
 # # # #         working-directory: MY-BACKEND
@@ -425,6 +637,8 @@
 # # #   GKE_ZONE: asia-south1-a
 # # #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 # # #   K8S_PATH: DEPLOYEMENT/K8/k8.yaml
+# # #   MONGODB_VERSION: "6.0"
+# # #   DOCKER_TAG: ${{ github.sha }}
 
 # # # jobs:
 # # #   security-and-build:
@@ -456,11 +670,15 @@
 # # #           cache: 'npm'
 # # #           cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
 
+# # #       - name: Install Dependencies
+# # #         if: matrix.task != 'docker'
+# # #         working-directory: MY-${{ matrix.component }}
+# # #         run: npm ci || npm install
+
 # # #       - name: Run Snyk Scan
 # # #         if: matrix.task == 'snyk'
 # # #         working-directory: MY-${{ matrix.component }}
 # # #         run: |
-# # #           npm ci || npm install
 # # #           npm install -g snyk
 # # #           snyk test --json > ../${{ matrix.component }}-snyk.json || true
 # # #         env:
@@ -501,7 +719,7 @@
 # # #           context: MY-${{ matrix.component }}
 # # #           push: true
 # # #           tags: |
-# # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
 # # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
 # # #           cache-from: type=gha
 # # #           cache-to: type=gha,mode=max
@@ -511,16 +729,10 @@
 # # #         if: matrix.task == 'docker'
 # # #         uses: aquasecurity/trivy-action@master
 # # #         with:
-# # #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# # #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
 # # #           format: 'sarif'
 # # #           output: '${{ matrix.component }}-trivy-results.sarif'
 # # #           severity: 'HIGH,CRITICAL'
-
-# # #       - name: Create CodeQL Database
-# # #         if: matrix.task == 'docker'
-# # #         uses: github/codeql-action/init@v3
-# # #         with:
-# # #           languages: javascript
 
 # # #       - name: Upload Trivy Results
 # # #         if: matrix.task == 'docker'
@@ -528,9 +740,6 @@
 # # #         with:
 # # #           sarif_file: ${{ matrix.component }}-trivy-results.sarif
 # # #           category: trivy-${{ matrix.component }}
-# # #           ref: ${{ github.ref }}
-# # #           sha: ${{ github.sha }}
-# # #           wait-for-processing: true
 
 # # #   deploy:
 # # #     needs: security-and-build
@@ -541,16 +750,10 @@
 # # #       id-token: 'write'
 
 # # #     steps:
-# # #       - name: Checkout Backend Repository
+# # #       - name: Checkout Repository
 # # #         uses: actions/checkout@v4.1.1
-# # #         with:
-# # #           repository: jai3747/MY-BACKEND
-# # #           path: MY-BACKEND
-# # #           fetch-depth: 0
 
-# # #       # New GCP Authentication Steps
-# # #       - id: 'auth'
-# # #         name: 'Authenticate to Google Cloud'
+# # #       - name: 'Authenticate to Google Cloud'
 # # #         uses: 'google-github-actions/auth@v1'
 # # #         with:
 # # #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
@@ -561,13 +764,10 @@
 # # #         with:
 # # #           version: '>= 363.0.0'
 
-# # #       - name: 'Install gke-gcloud-auth-plugin'
+# # #       - name: Install Dependencies
 # # #         run: |
 # # #           gcloud components install gke-gcloud-auth-plugin
 # # #           gcloud components update
-
-# # #       - name: Install kubectl
-# # #         run: |
 # # #           sudo apt-get update
 # # #           sudo apt-get install -y kubectl
 
@@ -576,25 +776,215 @@
 # # #           gcloud container clusters get-credentials "$GKE_CLUSTER" \
 # # #             --zone "$GKE_ZONE" \
 # # #             --project "$PROJECT_ID"
-      
+
+# # #       - name: Create Kubernetes Configs
+# # #         run: |
+# # #           # Create base directory
+# # #           mkdir -p k8s-configs
+          
+# # #           # Create MongoDB deployment
+# # #           cat <<EOF > k8s-configs/mongodb.yaml
+# # #           apiVersion: apps/v1
+# # #           kind: Deployment
+# # #           metadata:
+# # #             name: mongodb-deployment
+# # #           spec:
+# # #             replicas: 1
+# # #             selector:
+# # #               matchLabels:
+# # #                 app: mongodb
+# # #             template:
+# # #               metadata:
+# # #                 labels:
+# # #                   app: mongodb
+# # #               spec:
+# # #                 containers:
+# # #                 - name: mongodb
+# # #                   image: mongo:${MONGODB_VERSION}
+# # #                   ports:
+# # #                   - containerPort: 27017
+# # #                   resources:
+# # #                     requests:
+# # #                       cpu: "200m"
+# # #                       memory: "256Mi"
+# # #                     limits:
+# # #                       cpu: "500m"
+# # #                       memory: "512Mi"
+# # #                   volumeMounts:
+# # #                   - name: mongodb-data
+# # #                     mountPath: /data/db
+# # #                 volumes:
+# # #                 - name: mongodb-data
+# # #                   persistentVolumeClaim:
+# # #                     claimName: mongodb-data-claim
+# # #           ---
+# # #           apiVersion: v1
+# # #           kind: Service
+# # #           metadata:
+# # #             name: mongodb-service
+# # #           spec:
+# # #             selector:
+# # #               app: mongodb
+# # #             ports:
+# # #             - port: 27017
+# # #               targetPort: 27017
+# # #           EOF
+
+# # #           # Create Backend deployment
+# # #           cat <<EOF > k8s-configs/backend.yaml
+# # #           apiVersion: apps/v1
+# # #           kind: Deployment
+# # #           metadata:
+# # #             name: backend-deployment
+# # #           spec:
+# # #             replicas: 2
+# # #             selector:
+# # #               matchLabels:
+# # #                 app: backend
+# # #             template:
+# # #               metadata:
+# # #                 labels:
+# # #                   app: backend
+# # #               spec:
+# # #                 containers:
+# # #                 - name: backend
+# # #                   image: ${DOCKER_USERNAME}/my-backend-app:${DOCKER_TAG}
+# # #                   ports:
+# # #                   - containerPort: 5000
+# # #                   env:
+# # #                   - name: NODE_ENV
+# # #                     value: "production"
+# # #                   - name: PORT
+# # #                     value: "5000"
+# # #                   - name: MONGO_URI
+# # #                     valueFrom:
+# # #                       secretKeyRef:
+# # #                         name: mongodb-secret
+# # #                         key: MONGO_URI
+# # #                   resources:
+# # #                     requests:
+# # #                       cpu: "100m"
+# # #                       memory: "128Mi"
+# # #                     limits:
+# # #                       cpu: "200m"
+# # #                       memory: "256Mi"
+# # #                   readinessProbe:
+# # #                     httpGet:
+# # #                       path: /api/health
+# # #                       port: 5000
+# # #                     initialDelaySeconds: 10
+# # #                     periodSeconds: 5
+# # #                   livenessProbe:
+# # #                     httpGet:
+# # #                       path: /api/health
+# # #                       port: 5000
+# # #                     initialDelaySeconds: 15
+# # #                     periodSeconds: 20
+# # #           ---
+# # #           apiVersion: v1
+# # #           kind: Service
+# # #           metadata:
+# # #             name: backend-service
+# # #           spec:
+# # #             selector:
+# # #               app: backend
+# # #             ports:
+# # #             - port: 80
+# # #               targetPort: 5000
+# # #           EOF
+
+# # #           # Create Frontend deployment
+# # #           cat <<EOF > k8s-configs/frontend.yaml
+# # #           apiVersion: apps/v1
+# # #           kind: Deployment
+# # #           metadata:
+# # #             name: frontend-deployment
+# # #           spec:
+# # #             replicas: 2
+# # #             selector:
+# # #               matchLabels:
+# # #                 app: frontend
+# # #             template:
+# # #               metadata:
+# # #                 labels:
+# # #                   app: frontend
+# # #               spec:
+# # #                 containers:
+# # #                 - name: frontend
+# # #                   image: ${DOCKER_USERNAME}/my-frontend-app:${DOCKER_TAG}
+# # #                   ports:
+# # #                   - containerPort: 8080
+# # #                   env:
+# # #                   - name: REACT_APP_API_URL
+# # #                     value: "/api"
+# # #                   - name: REACT_APP_ENV
+# # #                     value: "production"
+# # #                   resources:
+# # #                     requests:
+# # #                       cpu: "100m"
+# # #                       memory: "64Mi"
+# # #                     limits:
+# # #                       cpu: "200m"
+# # #                       memory: "128Mi"
+# # #                   readinessProbe:
+# # #                     httpGet:
+# # #                       path: /
+# # #                       port: 8080
+# # #                     initialDelaySeconds: 10
+# # #                     periodSeconds: 5
+# # #                   livenessProbe:
+# # #                     httpGet:
+# # #                       path: /
+# # #                       port: 8080
+# # #                     initialDelaySeconds: 15
+# # #                     periodSeconds: 20
+# # #           ---
+# # #           apiVersion: v1
+# # #           kind: Service
+# # #           metadata:
+# # #             name: frontend-service
+# # #           spec:
+# # #             selector:
+# # #               app: frontend
+# # #             ports:
+# # #             - port: 80
+# # #               targetPort: 8080
+# # #             type: LoadBalancer
+# # #           EOF
+
 # # #       - name: Deploy to GKE
-# # #         working-directory: MY-BACKEND
 # # #         run: |
 # # #           # Create MongoDB secret
 # # #           kubectl create secret generic mongodb-secret \
 # # #             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
 # # #             --dry-run=client -o yaml | kubectl apply -f -
           
-# # #           # Update and apply deployment
-# # #           cd DEPLOYEMENT/K8
-# # #           sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKERHUB_USERNAME }}|g" k8.yaml
-# # #           sed -i "s|latest|${{ github.sha }}|g" k8.yaml
+# # #           # Create PVC for MongoDB if it doesn't exist
+# # #           cat <<EOF | kubectl apply -f -
+# # #           apiVersion: v1
+# # #           kind: PersistentVolumeClaim
+# # #           metadata:
+# # #             name: mongodb-data-claim
+# # #           spec:
+# # #             accessModes:
+# # #               - ReadWriteOnce
+# # #             resources:
+# # #               requests:
+# # #                 storage: 1Gi
+# # #           EOF
           
-# # #           kubectl apply -f k8.yaml
+# # #           # Apply all configurations
+# # #           kubectl apply -f k8s-configs/
           
-# # #           echo "Waiting for deployments..."
-# # #           kubectl rollout status deployment/frontend-deployment --timeout=300s
+# # #           # Wait for deployments
+# # #           echo "Waiting for MongoDB deployment..."
+# # #           kubectl rollout status deployment/mongodb-deployment --timeout=300s
+          
+# # #           echo "Waiting for Backend deployment..."
 # # #           kubectl rollout status deployment/backend-deployment --timeout=300s
+          
+# # #           echo "Waiting for Frontend deployment..."
+# # #           kubectl rollout status deployment/frontend-deployment --timeout=300s
           
 # # #           echo "Current Status:"
 # # #           kubectl get pods,svc,deployments
@@ -621,6 +1011,7 @@
 # # #   contents: read
 # # #   security-events: write
 # # #   id-token: write
+# # # .github/workflows/pipeline.yml
 # # name: Security, Build & Deploy Pipeline
 
 # # on:
@@ -636,9 +1027,8 @@
 # #   GKE_CLUSTER: cluster-1 
 # #   GKE_ZONE: asia-south1-a
 # #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-# #   K8S_PATH: DEPLOYEMENT/K8/k8.yaml
+# #   GITHUB_SHA: ${{ github.sha }}
 # #   MONGODB_VERSION: "6.0"
-# #   DOCKER_TAG: ${{ github.sha }}
 
 # # jobs:
 # #   security-and-build:
@@ -719,7 +1109,7 @@
 # #           context: MY-${{ matrix.component }}
 # #           push: true
 # #           tags: |
-# #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
+# #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
 # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
 # #           cache-from: type=gha
 # #           cache-to: type=gha,mode=max
@@ -729,7 +1119,7 @@
 # #         if: matrix.task == 'docker'
 # #         uses: aquasecurity/trivy-action@master
 # #         with:
-# #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
+# #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
 # #           format: 'sarif'
 # #           output: '${{ matrix.component }}-trivy-results.sarif'
 # #           severity: 'HIGH,CRITICAL'
@@ -750,7 +1140,7 @@
 # #       id-token: 'write'
 
 # #     steps:
-# #       - name: Checkout Repository
+# #       - name: Checkout Main Repository
 # #         uses: actions/checkout@v4.1.1
 
 # #       - name: 'Authenticate to Google Cloud'
@@ -764,7 +1154,7 @@
 # #         with:
 # #           version: '>= 363.0.0'
 
-# #       - name: Install Dependencies
+# #       - name: Install GKE Auth Plugin and kubectl
 # #         run: |
 # #           gcloud components install gke-gcloud-auth-plugin
 # #           gcloud components update
@@ -777,206 +1167,15 @@
 # #             --zone "$GKE_ZONE" \
 # #             --project "$PROJECT_ID"
 
-# #       - name: Create Kubernetes Configs
-# #         run: |
-# #           # Create base directory
-# #           mkdir -p k8s-configs
-          
-# #           # Create MongoDB deployment
-# #           cat <<EOF > k8s-configs/mongodb.yaml
-# #           apiVersion: apps/v1
-# #           kind: Deployment
-# #           metadata:
-# #             name: mongodb-deployment
-# #           spec:
-# #             replicas: 1
-# #             selector:
-# #               matchLabels:
-# #                 app: mongodb
-# #             template:
-# #               metadata:
-# #                 labels:
-# #                   app: mongodb
-# #               spec:
-# #                 containers:
-# #                 - name: mongodb
-# #                   image: mongo:${MONGODB_VERSION}
-# #                   ports:
-# #                   - containerPort: 27017
-# #                   resources:
-# #                     requests:
-# #                       cpu: "200m"
-# #                       memory: "256Mi"
-# #                     limits:
-# #                       cpu: "500m"
-# #                       memory: "512Mi"
-# #                   volumeMounts:
-# #                   - name: mongodb-data
-# #                     mountPath: /data/db
-# #                 volumes:
-# #                 - name: mongodb-data
-# #                   persistentVolumeClaim:
-# #                     claimName: mongodb-data-claim
-# #           ---
-# #           apiVersion: v1
-# #           kind: Service
-# #           metadata:
-# #             name: mongodb-service
-# #           spec:
-# #             selector:
-# #               app: mongodb
-# #             ports:
-# #             - port: 27017
-# #               targetPort: 27017
-# #           EOF
-
-# #           # Create Backend deployment
-# #           cat <<EOF > k8s-configs/backend.yaml
-# #           apiVersion: apps/v1
-# #           kind: Deployment
-# #           metadata:
-# #             name: backend-deployment
-# #           spec:
-# #             replicas: 2
-# #             selector:
-# #               matchLabels:
-# #                 app: backend
-# #             template:
-# #               metadata:
-# #                 labels:
-# #                   app: backend
-# #               spec:
-# #                 containers:
-# #                 - name: backend
-# #                   image: ${DOCKER_USERNAME}/my-backend-app:${DOCKER_TAG}
-# #                   ports:
-# #                   - containerPort: 5000
-# #                   env:
-# #                   - name: NODE_ENV
-# #                     value: "production"
-# #                   - name: PORT
-# #                     value: "5000"
-# #                   - name: MONGO_URI
-# #                     valueFrom:
-# #                       secretKeyRef:
-# #                         name: mongodb-secret
-# #                         key: MONGO_URI
-# #                   resources:
-# #                     requests:
-# #                       cpu: "100m"
-# #                       memory: "128Mi"
-# #                     limits:
-# #                       cpu: "200m"
-# #                       memory: "256Mi"
-# #                   readinessProbe:
-# #                     httpGet:
-# #                       path: /api/health
-# #                       port: 5000
-# #                     initialDelaySeconds: 10
-# #                     periodSeconds: 5
-# #                   livenessProbe:
-# #                     httpGet:
-# #                       path: /api/health
-# #                       port: 5000
-# #                     initialDelaySeconds: 15
-# #                     periodSeconds: 20
-# #           ---
-# #           apiVersion: v1
-# #           kind: Service
-# #           metadata:
-# #             name: backend-service
-# #           spec:
-# #             selector:
-# #               app: backend
-# #             ports:
-# #             - port: 80
-# #               targetPort: 5000
-# #           EOF
-
-# #           # Create Frontend deployment
-# #           cat <<EOF > k8s-configs/frontend.yaml
-# #           apiVersion: apps/v1
-# #           kind: Deployment
-# #           metadata:
-# #             name: frontend-deployment
-# #           spec:
-# #             replicas: 2
-# #             selector:
-# #               matchLabels:
-# #                 app: frontend
-# #             template:
-# #               metadata:
-# #                 labels:
-# #                   app: frontend
-# #               spec:
-# #                 containers:
-# #                 - name: frontend
-# #                   image: ${DOCKER_USERNAME}/my-frontend-app:${DOCKER_TAG}
-# #                   ports:
-# #                   - containerPort: 8080
-# #                   env:
-# #                   - name: REACT_APP_API_URL
-# #                     value: "/api"
-# #                   - name: REACT_APP_ENV
-# #                     value: "production"
-# #                   resources:
-# #                     requests:
-# #                       cpu: "100m"
-# #                       memory: "64Mi"
-# #                     limits:
-# #                       cpu: "200m"
-# #                       memory: "128Mi"
-# #                   readinessProbe:
-# #                     httpGet:
-# #                       path: /
-# #                       port: 8080
-# #                     initialDelaySeconds: 10
-# #                     periodSeconds: 5
-# #                   livenessProbe:
-# #                     httpGet:
-# #                       path: /
-# #                       port: 8080
-# #                     initialDelaySeconds: 15
-# #                     periodSeconds: 20
-# #           ---
-# #           apiVersion: v1
-# #           kind: Service
-# #           metadata:
-# #             name: frontend-service
-# #           spec:
-# #             selector:
-# #               app: frontend
-# #             ports:
-# #             - port: 80
-# #               targetPort: 8080
-# #             type: LoadBalancer
-# #           EOF
-
 # #       - name: Deploy to GKE
 # #         run: |
-# #           # Create MongoDB secret
-# #           kubectl create secret generic mongodb-secret \
-# #             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
-# #             --dry-run=client -o yaml | kubectl apply -f -
+# #           # Replace variables in k8s config
+# #           envsubst < k8s-config.yaml > k8s-config-processed.yaml
           
-# #           # Create PVC for MongoDB if it doesn't exist
-# #           cat <<EOF | kubectl apply -f -
-# #           apiVersion: v1
-# #           kind: PersistentVolumeClaim
-# #           metadata:
-# #             name: mongodb-data-claim
-# #           spec:
-# #             accessModes:
-# #               - ReadWriteOnce
-# #             resources:
-# #               requests:
-# #                 storage: 1Gi
-# #           EOF
+# #           # Apply configurations
+# #           kubectl apply -f k8s-config-processed.yaml
           
-# #           # Apply all configurations
-# #           kubectl apply -f k8s-configs/
-          
-# #           # Wait for deployments
+# #           # Wait for deployments with increased timeout
 # #           echo "Waiting for MongoDB deployment..."
 # #           kubectl rollout status deployment/mongodb-deployment --timeout=300s
           
@@ -988,6 +1187,10 @@
           
 # #           echo "Current Status:"
 # #           kubectl get pods,svc,deployments
+# #         env:
+# #           MONGODB_URI: ${{ secrets.MONGODB_URI }}
+# #           GITHUB_SHA: ${{ github.sha }}
+# #           DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
 # #   report:
 # #     needs: [security-and-build, deploy]
@@ -1011,7 +1214,6 @@
 # #   contents: read
 # #   security-events: write
 # #   id-token: write
-# # .github/workflows/pipeline.yml
 # name: Security, Build & Deploy Pipeline
 
 # on:
@@ -1027,8 +1229,9 @@
 #   GKE_CLUSTER: cluster-1 
 #   GKE_ZONE: asia-south1-a
 #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-#   GITHUB_SHA: ${{ github.sha }}
 #   MONGODB_VERSION: "6.0"
+#   DOCKER_TAG: ${{ github.sha }}
+#   K8S_PATH: MY-BACKEND/DEPLOYEMENT/K8/k8.yaml
 
 # jobs:
 #   security-and-build:
@@ -1074,14 +1277,6 @@
 #         env:
 #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       
-#       - name: Upload Snyk Results
-#         if: matrix.task == 'snyk'
-#         uses: actions/upload-artifact@v3
-#         with:
-#           name: ${{ matrix.component }}-snyk-results
-#           path: ${{ matrix.component }}-snyk.json
-#           retention-days: 5
-
 #       - name: Run Semgrep Scan
 #         if: matrix.task == 'semgrep'
 #         uses: semgrep/semgrep-action@v1
@@ -1109,7 +1304,7 @@
 #           context: MY-${{ matrix.component }}
 #           push: true
 #           tags: |
-#             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+#             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
 #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
 #           cache-from: type=gha
 #           cache-to: type=gha,mode=max
@@ -1119,17 +1314,10 @@
 #         if: matrix.task == 'docker'
 #         uses: aquasecurity/trivy-action@master
 #         with:
-#           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+#           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
 #           format: 'sarif'
 #           output: '${{ matrix.component }}-trivy-results.sarif'
 #           severity: 'HIGH,CRITICAL'
-
-#       - name: Upload Trivy Results
-#         if: matrix.task == 'docker'
-#         uses: github/codeql-action/upload-sarif@v3
-#         with:
-#           sarif_file: ${{ matrix.component }}-trivy-results.sarif
-#           category: trivy-${{ matrix.component }}
 
 #   deploy:
 #     needs: security-and-build
@@ -1143,21 +1331,24 @@
 #       - name: Checkout Main Repository
 #         uses: actions/checkout@v4.1.1
 
+#       - name: Checkout Backend Repository
+#         uses: actions/checkout@v4.1.1
+#         with:
+#           repository: jai3747/MY-BACKEND
+#           path: MY-BACKEND
+#           fetch-depth: 0
+
 #       - name: 'Authenticate to Google Cloud'
 #         uses: 'google-github-actions/auth@v1'
 #         with:
 #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
-#           project_id: '${{ secrets.GCP_PROJECT_ID }}'
 
 #       - name: 'Set up Cloud SDK'
 #         uses: 'google-github-actions/setup-gcloud@v1'
-#         with:
-#           version: '>= 363.0.0'
 
-#       - name: Install GKE Auth Plugin and kubectl
+#       - name: Install kubectl
 #         run: |
 #           gcloud components install gke-gcloud-auth-plugin
-#           gcloud components update
 #           sudo apt-get update
 #           sudo apt-get install -y kubectl
 
@@ -1167,30 +1358,28 @@
 #             --zone "$GKE_ZONE" \
 #             --project "$PROJECT_ID"
 
-#       - name: Deploy to GKE
+#       - name: Create MongoDB Secret
 #         run: |
-#           # Replace variables in k8s config
-#           envsubst < k8s-config.yaml > k8s-config-processed.yaml
+#           kubectl create secret generic mongodb-secret \
+#             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
+#             --dry-run=client -o yaml | kubectl apply -f -
+
+#       - name: Prepare K8s Config
+#         run: |
+#           # Replace environment variables in k8s config
+#           envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < ${{ env.K8S_PATH }} > k8s_processed.yaml
+
+#       - name: Apply Kubernetes Configurations
+#         run: |
+#           kubectl apply -f k8s_processed.yaml
           
-#           # Apply configurations
-#           kubectl apply -f k8s-config-processed.yaml
-          
-#           # Wait for deployments with increased timeout
-#           echo "Waiting for MongoDB deployment..."
+#           echo "Waiting for deployments..."
 #           kubectl rollout status deployment/mongodb-deployment --timeout=300s
-          
-#           echo "Waiting for Backend deployment..."
 #           kubectl rollout status deployment/backend-deployment --timeout=300s
-          
-#           echo "Waiting for Frontend deployment..."
 #           kubectl rollout status deployment/frontend-deployment --timeout=300s
           
-#           echo "Current Status:"
+#           echo "Deployment Status:"
 #           kubectl get pods,svc,deployments
-#         env:
-#           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-#           GITHUB_SHA: ${{ github.sha }}
-#           DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
 #   report:
 #     needs: [security-and-build, deploy]
@@ -1243,16 +1432,9 @@ jobs:
       fail-fast: false
     
     steps:
-      - name: Checkout Main Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4.1.1
         with:
-          fetch-depth: 0
-
-      - name: Checkout Component Repository
-        uses: actions/checkout@v4.1.1
-        with:
-          repository: jai3747/MY-${{ matrix.component }}
-          path: MY-${{ matrix.component }}
           fetch-depth: 0
       
       - name: Setup Node.js
@@ -1261,19 +1443,16 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
-          cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
 
       - name: Install Dependencies
         if: matrix.task != 'docker'
-        working-directory: MY-${{ matrix.component }}
         run: npm ci || npm install
 
       - name: Run Snyk Scan
         if: matrix.task == 'snyk'
-        working-directory: MY-${{ matrix.component }}
         run: |
           npm install -g snyk
-          snyk test --json > ../${{ matrix.component }}-snyk.json || true
+          snyk test --json > ${{ matrix.component }}-snyk.json || true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
       
@@ -1301,7 +1480,7 @@ jobs:
         if: matrix.task == 'docker'
         uses: docker/build-push-action@v5
         with:
-          context: MY-${{ matrix.component }}
+          context: ./${{ matrix.component }}
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
@@ -1328,15 +1507,8 @@ jobs:
       id-token: 'write'
 
     steps:
-      - name: Checkout Main Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4.1.1
-
-      - name: Checkout Backend Repository
-        uses: actions/checkout@v4.1.1
-        with:
-          repository: jai3747/MY-BACKEND
-          path: MY-BACKEND
-          fetch-depth: 0
 
       - name: 'Authenticate to Google Cloud'
         uses: 'google-github-actions/auth@v1'
@@ -1364,22 +1536,15 @@ jobs:
             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Prepare K8s Config
+      - name: Deploy to Kubernetes
         run: |
-          # Replace environment variables in k8s config
           envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < ${{ env.K8S_PATH }} > k8s_processed.yaml
-
-      - name: Apply Kubernetes Configurations
-        run: |
           kubectl apply -f k8s_processed.yaml
           
           echo "Waiting for deployments..."
           kubectl rollout status deployment/mongodb-deployment --timeout=300s
           kubectl rollout status deployment/backend-deployment --timeout=300s
           kubectl rollout status deployment/frontend-deployment --timeout=300s
-          
-          echo "Deployment Status:"
-          kubectl get pods,svc,deployments
 
   report:
     needs: [security-and-build, deploy]
@@ -1398,8 +1563,3 @@ jobs:
           else
             echo "❌ Pipeline completed with issues." >> $GITHUB_STEP_SUMMARY
           fi
-
-permissions:
-  contents: read
-  security-events: write
-  id-token: write
