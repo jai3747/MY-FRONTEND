@@ -1,5 +1,4 @@
 # # # # # # name: Security, Build & Deploy Pipeline
-
 # # # # # # on:
 # # # # # #   workflow_dispatch:
 # # # # # #   push:
