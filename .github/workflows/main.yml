@@ -2170,7 +2170,8 @@ jobs:
           sed -i "s|latest|${{ github.sha }}|g" k8.yaml
           
           # Apply the configurations
-          kubectl apply -f k8.yaml
+          kubectl apply -f MY-BACKEND/DEPLOYEMENT/K8/k8.yaml
+
           
           # Wait for deployments to be ready
           kubectl rollout status deployment/frontend-deployment
