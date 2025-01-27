@@ -1,3 +1,209 @@
+# # name: Security, Build & Deploy Pipeline
+
+# # on:
+# #   workflow_dispatch:
+# #   push:
+# #     branches: [main]
+# #   pull_request:
+# #     branches: [main]
+
+# # env:
+# #   NODE_OPTIONS: --openssl-legacy-provider
+# #   DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+# #   GKE_CLUSTER: cluster-1 
+# #   GKE_ZONE: asia-south1-a
+# #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+# #   K8S_PATH: DEPLOYEMENT/K8/k8.yaml
+
+# # jobs:
+# #   security-and-build:
+# #     runs-on: ubuntu-latest
+# #     strategy:
+# #       matrix:
+# #         component: [frontend, backend]
+# #         task: [snyk, semgrep, docker]
+# #       fail-fast: false
+    
+# #     steps:
+# #       - name: Checkout Main Repository
+# #         uses: actions/checkout@v4.1.1
+# #         with:
+# #           fetch-depth: 0
+
+# #       - name: Checkout Component Repository
+# #         uses: actions/checkout@v4.1.1
+# #         with:
+# #           repository: jai3747/MY-${{ matrix.component }}
+# #           path: MY-${{ matrix.component }}
+# #           fetch-depth: 0
+      
+# #       - name: Setup Node.js
+# #         if: matrix.task != 'docker'
+# #         uses: actions/setup-node@v4.0.2
+# #         with:
+# #           node-version: '18'
+# #           cache: 'npm'
+# #           cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
+
+# #       - name: Run Snyk Scan
+# #         if: matrix.task == 'snyk'
+# #         working-directory: MY-${{ matrix.component }}
+# #         run: |
+# #           npm ci || npm install
+# #           npm install -g snyk
+# #           snyk test --json > ../${{ matrix.component }}-snyk.json || true
+# #         env:
+# #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      
+# #       - name: Upload Snyk Results
+# #         if: matrix.task == 'snyk'
+# #         uses: actions/upload-artifact@v3
+# #         with:
+# #           name: ${{ matrix.component }}-snyk-results
+# #           path: ${{ matrix.component }}-snyk.json
+# #           retention-days: 5
+
+# #       - name: Run Semgrep Scan
+# #         if: matrix.task == 'semgrep'
+# #         uses: semgrep/semgrep-action@v1
+# #         with:
+# #           publishToken: ${{ secrets.SEMGREP_TOKEN }}
+# #           publishDeployment: 1
+# #           generateSarif: 1
+# #           output: ${{ matrix.component }}-semgrep.sarif
+
+# #       - name: Set up Docker Buildx
+# #         if: matrix.task == 'docker'
+# #         uses: docker/setup-buildx-action@v3
+
+# #       - name: Login to DockerHub
+# #         if: matrix.task == 'docker'
+# #         uses: docker/login-action@v3
+# #         with:
+# #           username: ${{ secrets.DOCKERHUB_USERNAME }}
+# #           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+# #       - name: Docker Build and Push
+# #         if: matrix.task == 'docker'
+# #         uses: docker/build-push-action@v5
+# #         with:
+# #           context: MY-${{ matrix.component }}
+# #           push: true
+# #           tags: |
+# #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
+# #           cache-from: type=gha
+# #           cache-to: type=gha,mode=max
+# #           provenance: false
+
+# #       - name: Run Trivy Scan
+# #         if: matrix.task == 'docker'
+# #         uses: aquasecurity/trivy-action@master
+# #         with:
+# #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ github.sha }}
+# #           format: 'sarif'
+# #           output: '${{ matrix.component }}-trivy-results.sarif'
+# #           severity: 'HIGH,CRITICAL'
+
+# #       - name: Create CodeQL Database
+# #         if: matrix.task == 'docker'
+# #         uses: github/codeql-action/init@v3
+# #         with:
+# #           languages: javascript
+
+# #       - name: Upload Trivy Results
+# #         if: matrix.task == 'docker'
+# #         uses: github/codeql-action/upload-sarif@v3
+# #         with:
+# #           sarif_file: ${{ matrix.component }}-trivy-results.sarif
+# #           category: trivy-${{ matrix.component }}
+# #           ref: ${{ github.ref }}
+# #           sha: ${{ github.sha }}
+# #           wait-for-processing: true
+
+# #   deploy:
+# #     needs: security-and-build
+# #     runs-on: ubuntu-latest
+# #     environment: production
+# #     permissions:
+# #       contents: 'read'
+# #       id-token: 'write'
+
+# #     steps:
+# #       - name: Checkout Backend Repository
+# #         uses: actions/checkout@v4.1.1
+# #         with:
+# #           repository: jai3747/MY-BACKEND
+# #           path: MY-BACKEND
+# #           fetch-depth: 0
+
+# #       - name: Authenticate to Google Cloud
+# #         uses: google-github-actions/auth@v1
+# #         with:
+# #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+# #       - name: Set up Cloud SDK
+# #         uses: google-github-actions/setup-gcloud@v1
+# #         with:
+# #           version: '>= 363.0.0'
+# #           project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+# #       - name: Install kubectl
+# #         run: |
+# #           sudo apt-get update
+# #           sudo apt-get install -y kubectl
+# #           sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+
+# #       - name: Get GKE Credentials
+# #         run: |
+# #           gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
+# #             --zone ${{ env.GKE_ZONE }} \
+# #             --project ${{ secrets.GCP_PROJECT_ID }}
+      
+# #       - name: Deploy to GKE
+# #         working-directory: MY-BACKEND
+# #         run: |
+# #           # Create MongoDB secret
+# #           kubectl create secret generic mongodb-secret \
+# #             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
+# #             --dry-run=client -o yaml | kubectl apply -f -
+          
+# #           # Update and apply deployment
+# #           cd DEPLOYEMENT/K8
+# #           sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKERHUB_USERNAME }}|g" k8.yaml
+# #           sed -i "s|latest|${{ github.sha }}|g" k8.yaml
+          
+# #           kubectl apply -f k8.yaml
+          
+# #           echo "Waiting for deployments..."
+# #           kubectl rollout status deployment/frontend-deployment --timeout=300s
+# #           kubectl rollout status deployment/backend-deployment --timeout=300s
+          
+# #           echo "Current Status:"
+# #           kubectl get pods,svc,deployments
+
+# #   report:
+# #     needs: [security-and-build, deploy]
+# #     runs-on: ubuntu-latest
+# #     if: always()
+# #     steps:
+# #       - name: Generate Final Report
+# #         run: |
+# #           echo "# Pipeline Execution Report" >> $GITHUB_STEP_SUMMARY
+# #           echo "## Security & Build Status" >> $GITHUB_STEP_SUMMARY
+# #           echo "- Build & Security Checks: ${{ needs.security-and-build.result }}" >> $GITHUB_STEP_SUMMARY
+# #           echo "- Deployment Status: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          
+# #           if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+# #             echo "✅ Pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY
+# #           else
+# #             echo "❌ Pipeline completed with issues." >> $GITHUB_STEP_SUMMARY
+# #           fi
+
+# # permissions:
+# #   contents: read
+# #   security-events: write
+# #   id-token: write
 # name: Security, Build & Deploy Pipeline
 
 # on:
@@ -137,22 +343,21 @@
 #           path: MY-BACKEND
 #           fetch-depth: 0
 
-#       - name: Authenticate to Google Cloud
-#         uses: google-github-actions/auth@v1
-#         with:
-#           credentials_json: '${{ secrets.GCP_SA_KEY }}'
-
-#       - name: Set up Cloud SDK
+#       - name: Setup gcloud CLI
 #         uses: google-github-actions/setup-gcloud@v1
 #         with:
-#           version: '>= 363.0.0'
 #           project_id: ${{ secrets.GCP_PROJECT_ID }}
-
+#           service_account_key: ${{ secrets.GCP_SA_KEY }}
+#           install_components: 'gke-gcloud-auth-plugin'
+          
+#       - name: Configure Docker for GCR
+#         run: |
+#           gcloud auth configure-docker
+          
 #       - name: Install kubectl
 #         run: |
 #           sudo apt-get update
 #           sudo apt-get install -y kubectl
-#           sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
 
 #       - name: Get GKE Credentials
 #         run: |
@@ -343,17 +548,24 @@ jobs:
           path: MY-BACKEND
           fetch-depth: 0
 
-      - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v1
+      # New GCP Authentication Steps
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-          service_account_key: ${{ secrets.GCP_SA_KEY }}
-          install_components: 'gke-gcloud-auth-plugin'
-          
-      - name: Configure Docker for GCR
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          project_id: '${{ secrets.GCP_PROJECT_ID }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+        with:
+          version: '>= 363.0.0'
+
+      - name: 'Install gke-gcloud-auth-plugin'
         run: |
-          gcloud auth configure-docker
-          
+          gcloud components install gke-gcloud-auth-plugin
+          gcloud components update
+
       - name: Install kubectl
         run: |
           sudo apt-get update
@@ -361,9 +573,9 @@ jobs:
 
       - name: Get GKE Credentials
         run: |
-          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
-            --zone ${{ env.GKE_ZONE }} \
-            --project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud container clusters get-credentials "$GKE_CLUSTER" \
+            --zone "$GKE_ZONE" \
+            --project "$PROJECT_ID"
       
       - name: Deploy to GKE
         working-directory: MY-BACKEND
