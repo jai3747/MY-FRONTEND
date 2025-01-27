@@ -1541,6 +1541,69 @@ jobs:
             --zone ${{ env.GKE_ZONE }} \
             --project ${{ secrets.GCP_PROJECT_ID }}
       
+      # - name: Deploy to GKE
+      #   run: |
+      #     # Create MongoDB credentials secret
+      #     kubectl create secret generic mongodb-secret \
+      #       --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
+      #       --dry-run=client -o yaml | kubectl apply -f -
+          
+      #     # Update image tags in deployment files
+      #     sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKERHUB_USERNAME }}|g" k8.yaml
+      #     sed -i "s|latest|${{ github.sha }}|g" k8.yaml
+          
+      #     # Apply the configurations
+      #     kubectl apply -f k8.yaml
+          
+      #     # Wait for deployments to be ready
+      #     kubectl rollout status deployment/frontend-deployment
+      #     kubectl rollout status deployment/backend-deployment
+
+      #     # Get pods and services status
+      #     echo "Pod Status:"
+      #     kubectl get pods
+          
+      #     echo "Services Status:"
+      #     kubectl get svc
+ deploy:
+    needs: [frontend-build-push, backend-build-push]
+    runs-on: ubuntu-latest
+    environment: production
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.1.1
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '>= 363.0.0'
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install GKE Auth Plugin
+        run: |
+          sudo rm -rf /var/lib/apt/lists/lock
+          sudo rm -rf /var/cache/apt/archives/lock
+          sudo rm -rf /var/lib/dpkg/lock*
+          sudo apt-get update
+          sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+
+      - name: Get GKE Credentials
+        run: |
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
+            --zone ${{ env.GKE_ZONE }} \
+            --project ${{ secrets.GCP_PROJECT_ID }}
+      
       - name: Deploy to GKE
         run: |
           # Create MongoDB credentials secret
