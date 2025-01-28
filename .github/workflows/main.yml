@@ -233,8 +233,13 @@ jobs:
 
       - name: Apply Kubernetes Configurations
         run: |
-          envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < ${{ env.K8S_PATH }}/k8.yaml > k8s_processed.yaml
-          kubectl apply -f k8s_processed.yaml
+          # Apply each Kubernetes configuration file separately
+          for config in backend-deployment.yaml backend-service.yaml frontend-deployment.yaml frontend-service.yaml mongodb-deployment.yaml mongodb-service.yaml pvc.yaml; do
+            # Process environment variables
+            envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < MY-BACKEND/DEPLOYEMENT/K8/$config > processed-$config
+            # Apply the processed configuration
+            kubectl apply -f processed-$config
+          done
           
           echo "Waiting for deployments..."
           kubectl rollout status statefulset/mongodb-deployment --timeout=300s
@@ -242,7 +247,6 @@ jobs:
           kubectl rollout status deployment/frontend-deployment --timeout=300s
           
           echo "Deployment Status:"
-          echo "Deployment Status (Pods and Services):"
           kubectl get pods,svc,deployments,statefulsets
 
   report:
