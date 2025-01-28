@@ -233,7 +233,7 @@ jobs:
 
       - name: Apply Kubernetes Configurations
         run: |
-          envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < ${{ env.K8S_PATH }} > k8s_processed.yaml
+          envsubst '${DOCKER_USERNAME} ${GITHUB_SHA}' < ${{ env.K8S_PATH }}/k8.yaml > k8s_processed.yaml
           kubectl apply -f k8s_processed.yaml
           
           echo "Waiting for deployments..."
@@ -242,6 +242,7 @@ jobs:
           kubectl rollout status deployment/frontend-deployment --timeout=300s
           
           echo "Deployment Status:"
+          echo "Deployment Status (Pods and Services):"
           kubectl get pods,svc,deployments,statefulsets
 
   report:
