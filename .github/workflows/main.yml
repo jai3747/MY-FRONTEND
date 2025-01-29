@@ -1,3 +1,4 @@
+
 # name: Security, Build & Deploy Pipeline with Enhanced Reporting
 # on:
 #   workflow_dispatch:
@@ -17,6 +18,7 @@
 #   MONGODB_VERSION: '6.0'
 #   DOCKER_TAG: ${{ github.sha }}
 #   K8S_PATH: MY-BACKEND/mern-app
+#   NAMESPACE: mern-app
 
 # concurrency:
 #   group: ${{ github.workflow }}-${{ github.ref }}
@@ -150,7 +152,7 @@
 #           timeout: '10m'
 #           scanners: 'vuln,secret,config'
 #           ignore-unfixed: true
-
+      
 #       - name: Upload Trivy Results
 #         if: matrix.task == 'docker'
 #         uses: actions/upload-artifact@v3
@@ -201,20 +203,16 @@
 #             --zone "$GKE_ZONE" \
 #             --project "$PROJECT_ID"
 
-#       - name: Clean up any stuck Helm operations
-#         working-directory: ${{ env.K8S_PATH }}
+#       - name: Create Namespace and Setup
 #         run: |
-#           # Check current Helm releases
-#           helm list -a
-          
-#           # Force delete any stuck release
-#           helm delete mern-app --no-hooks || true
-          
-#           # Wait for resources to be cleaned up
-#           sleep 20
-          
-#           # Clean up any stuck pods
-#           kubectl delete pods -l app=mern-app --force --grace-period=0 || true
+#           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+#           kubectl config set-context --current --namespace=${{ env.NAMESPACE }}
+
+#       - name: Clean up Previous Deployment
+#         run: |
+#           helm uninstall mern-app -n ${{ env.NAMESPACE }} || true
+#           kubectl delete --all pods,services,deployments,configmaps -n ${{ env.NAMESPACE }} --grace-period=0 --force || true
+#           sleep 10
 
 #       - name: Deploy with Helm
 #         working-directory: ${{ env.K8S_PATH }}
@@ -224,43 +222,34 @@
 #           yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
 #           yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
           
-#           # Print the current values for verification
-#           echo "Current values.yaml content:"
-#           cat values.yaml
-          
 #           # Install/Upgrade Helm chart with retry logic
 #           MAX_RETRIES=3
 #           RETRY_COUNT=0
           
 #           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
 #             if helm upgrade --install mern-app . \
-#               --wait \
-#               --timeout 10m \
-#               --atomic \
-#               --cleanup-on-fail \
-#               --namespace default \
+#               --namespace ${{ env.NAMESPACE }} \
 #               --create-namespace \
-#               --debug \
+#               --atomic \
+#               --timeout 10m \
 #               --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
 #               --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
 #               --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
-#               --set mongodb.auth.database="mern-app"; then
+#               --set mongodb.auth.database="mern-app" \
+#               --wait; then
 #               echo "✅ Helm deployment successful!"
 #               break
 #             else
 #               RETRY_COUNT=$((RETRY_COUNT + 1))
 #               if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
 #                 echo "❌ Failed to deploy after $MAX_RETRIES attempts"
-#                 echo "Printing debug information..."
-#                 kubectl get pods
-#                 kubectl describe pods -l app=mern-app
-#                 helm list -a
-#                 helm history mern-app || true
+#                 kubectl get all -n ${{ env.NAMESPACE }}
+#                 kubectl describe pods -n ${{ env.NAMESPACE }}
 #                 exit 1
 #               fi
 #               echo "⚠️ Deployment failed, attempt $RETRY_COUNT of $MAX_RETRIES. Retrying in 30s..."
-#               helm delete mern-app --no-hooks || true
-#               kubectl delete pods -l app=mern-app --force --grace-period=0 || true
+#               helm uninstall mern-app -n ${{ env.NAMESPACE }} || true
+#               kubectl delete --all pods,deployments -n ${{ env.NAMESPACE }} --force --grace-period=0 || true
 #               sleep 30
 #             fi
 #           done
@@ -269,36 +258,24 @@
 #         run: |
 #           echo "🔍 Starting deployment verification..."
           
-#           # Wait for all pods to be ready
-#           echo "Waiting for pods to be ready..."
-#           kubectl wait --for=condition=ready pod -l app=mern-app --timeout=300s || {
-#             echo "❌ Pods failed to become ready. Current pod status:"
-#             kubectl get pods -l app=mern-app
-#             kubectl describe pods -l app=mern-app
+#           # Wait for deployments to be ready
+#           kubectl wait --for=condition=available deployment --all -n ${{ env.NAMESPACE }} --timeout=5m || {
+#             echo "❌ Deployments failed to become ready"
+#             kubectl get all -n ${{ env.NAMESPACE }}
+#             kubectl describe pods -n ${{ env.NAMESPACE }}
 #             exit 1
 #           }
           
-#           # Verify deployments
-#           echo "Checking deployments..."
-#           kubectl get deployments
-#           kubectl wait --for=condition=available deployment -l app=mern-app --timeout=300s || {
-#             echo "❌ Deployments not available. Current deployment status:"
-#             kubectl get deployments -l app=mern-app
-#             kubectl describe deployments -l app=mern-app
-#             exit 1
-#           }
-          
-#           # Check services
-#           echo "Verifying services..."
-#           kubectl get services -l app=mern-app || {
+#           # Verify services
+#           kubectl get services -n ${{ env.NAMESPACE }} || {
 #             echo "❌ Services not found"
 #             exit 1
 #           }
           
-#           # Check MongoDB
-#           echo "Checking MongoDB status..."
-#           kubectl get statefulset mongodb || {
-#             echo "❌ MongoDB StatefulSet not found"
+#           # Verify MongoDB
+#           kubectl wait --for=condition=ready pod -l app=mongodb -n ${{ env.NAMESPACE }} --timeout=5m || {
+#             echo "❌ MongoDB failed to become ready"
+#             kubectl describe pods -l app=mongodb -n ${{ env.NAMESPACE }}
 #             exit 1
 #           }
           
@@ -308,19 +285,12 @@
 #         if: failure()
 #         run: |
 #           echo "🔄 Deployment failed, initiating rollback..."
-          
-#           # Attempt to rollback Helm release
-#           helm rollback mern-app 0 || true
-          
-#           # Force delete stuck resources
-#           kubectl delete deployment -l app=mern-app --force --grace-period=0 || true
-#           kubectl delete pod -l app=mern-app --force --grace-period=0 || true
-          
-#           # Print final status
+#           helm rollback mern-app -n ${{ env.NAMESPACE }} || true
+#           kubectl delete --all pods,deployments -n ${{ env.NAMESPACE }} --force --grace-period=0 || true
 #           echo "Current cluster status after rollback:"
-#           kubectl get pods,deployments,services -l app=mern-app
+#           kubectl get all -n ${{ env.NAMESPACE }}
 
-#   report:
+#     report:
 #     needs: [security-and-build, deploy]
 #     runs-on: ubuntu-latest
 #     if: always()
@@ -484,7 +454,12 @@
 #           echo "- Semgrep Findings: $([ -f "scan-results/backend-semgrep-results/backend-semgrep.sarif" ] && jq '.runs[].results | length' scan-results/backend-semgrep-results/backend-semgrep.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
 #           echo "- Trivy Container Issues: $([ -f "scan-results/backend-trivy-results/backend-trivy-results.sarif" ] && jq '.runs[].results | length' scan-results/backend-trivy-results/backend-trivy-results.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
 
-name: Security, Build & Deploy Pipeline with Enhanced Reporting
+
+          
+
+ 
+
+ name: Security, Build & Deploy Pipeline with Enhanced Reporting
 on:
   workflow_dispatch:
   push:
@@ -777,8 +752,8 @@ jobs:
 
   report:
     needs: [security-and-build, deploy]
-    if: always()
     runs-on: ubuntu-latest
+    if: always()
     steps:
       - name: Download Scan Results
         uses: actions/download-artifact@v3
@@ -789,21 +764,159 @@ jobs:
         run: |
           echo "# 🔒 Security Scan Summary Report" >> $GITHUB_STEP_SUMMARY
           
-          # Process Frontend Results
+          # Frontend Security Analysis
           echo "## 🌐 Frontend Security Analysis" >> $GITHUB_STEP_SUMMARY
-          ./process-security-results.sh "frontend"
           
-          # Process Backend Results
+          echo "### 1️⃣ Snyk Dependency Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/frontend-snyk-results/frontend-snyk.json" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              "Vulnerabilities Found:
+              🔴 Critical: \(.vulnerabilities | map(select(.severity == "critical")) | length)
+              🟠 High: \(.vulnerabilities | map(select(.severity == "high")) | length)
+              🟡 Medium: \(.vulnerabilities | map(select(.severity == "medium")) | length)
+              🟢 Low: \(.vulnerabilities | map(select(.severity == "low")) | length)"
+            ' scan-results/frontend-snyk-results/frontend-snyk.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### Critical & High Priority Issues:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.vulnerabilities[] | 
+              select(.severity == "critical" or .severity == "high") | 
+              "- [\(.severity | ascii_upcase)] \(.title) in \(.packageName) \(.packageVersion)
+                  ↳ Fix: \(.fixedIn[0] // "No fix available")
+                  ↳ CVE: \(.identifiers.CVE[0] // "No CVE")"
+            ' scan-results/frontend-snyk-results/frontend-snyk.json | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### 2️⃣ Semgrep Code Analysis" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/frontend-semgrep-results/frontend-semgrep.sarif" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              .runs[].results | 
+              group_by(.level) | 
+              map({level: .[0].level, count: length}) | 
+              "Findings:
+              🔴 Error: \(map(select(.level == "error")) | .[0].count // 0)
+              🟠 Warning: \(map(select(.level == "warning")) | .[0].count // 0)
+              🟡 Note: \(map(select(.level == "note")) | .[0].count // 0)"
+            ' scan-results/frontend-semgrep-results/frontend-semgrep.sarif >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### High Priority Findings:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[] | 
+              select(.level == "error" or .level == "warning") |
+              "- [\(.level | ascii_upcase)] \(.message.text)
+                  ↳ File: \(.locations[0].physicalLocation.artifactLocation.uri)
+                  ↳ Line: \(.locations[0].physicalLocation.region.startLine)"
+            ' scan-results/frontend-semgrep-results/frontend-semgrep.sarif | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+                    echo "### 3️⃣ Trivy Container Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/frontend-trivy-results/frontend-trivy-results.sarif" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              .runs[].results | 
+              group_by(.level) | 
+              map({level: .[0].level, count: length}) | 
+              "Container Vulnerabilities:
+              🔴 Critical: \(map(select(.level == "error")) | .[0].count // 0)
+              🟠 High: \(map(select(.level == "warning")) | .[0].count // 0)
+              🟡 Medium: \(map(select(.level == "note")) | .[0].count // 0)"
+            ' scan-results/frontend-trivy-results/frontend-trivy-results.sarif >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### Critical Container Vulnerabilities:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[] | 
+              select(.level == "error" or .level == "warning") |
+              "- [\(.level | ascii_upcase)] \(.message.text)
+                  ↳ Component: \(.locations[0].physicalLocation.artifactLocation.uri // "Not specified")"
+            ' scan-results/frontend-trivy-results/frontend-trivy-results.sarif | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Backend Security Analysis
           echo "## ⚙️ Backend Security Analysis" >> $GITHUB_STEP_SUMMARY
-          ./process-security-results.sh "backend"
           
-          # Add Summary Section
+          echo "### 1️⃣ Snyk Dependency Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/backend-snyk-results/backend-snyk.json" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              "Vulnerabilities Found:
+              🔴 Critical: \(.vulnerabilities | map(select(.severity == "critical")) | length)
+              🟠 High: \(.vulnerabilities | map(select(.severity == "high")) | length)
+              🟡 Medium: \(.vulnerabilities | map(select(.severity == "medium")) | length)
+              🟢 Low: \(.vulnerabilities | map(select(.severity == "low")) | length)"
+            ' scan-results/backend-snyk-results/backend-snyk.json >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### Critical & High Priority Issues:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.vulnerabilities[] | 
+              select(.severity == "critical" or .severity == "high") | 
+              "- [\(.severity | ascii_upcase)] \(.title) in \(.packageName) \(.packageVersion)
+                  ↳ Fix: \(.fixedIn[0] // "No fix available")
+                  ↳ CVE: \(.identifiers.CVE[0] // "No CVE")"
+            ' scan-results/backend-snyk-results/backend-snyk.json | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### 2️⃣ Semgrep Code Analysis" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/backend-semgrep-results/backend-semgrep.sarif" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              .runs[].results | 
+              group_by(.level) | 
+              map({level: .[0].level, count: length}) | 
+              "Findings:
+              🔴 Error: \(map(select(.level == "error")) | .[0].count // 0)
+              🟠 Warning: \(map(select(.level == "warning")) | .[0].count // 0)
+              🟡 Note: \(map(select(.level == "note")) | .[0].count // 0)"
+            ' scan-results/backend-semgrep-results/backend-semgrep.sarif >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### High Priority Findings:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[] | 
+              select(.level == "error" or .level == "warning") |
+              "- [\(.level | ascii_upcase)] \(.message.text)
+                  ↳ File: \(.locations[0].physicalLocation.artifactLocation.uri)
+                  ↳ Line: \(.locations[0].physicalLocation.region.startLine)"
+            ' scan-results/backend-semgrep-results/backend-semgrep.sarif | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "### 3️⃣ Trivy Container Scan" >> $GITHUB_STEP_SUMMARY
+          if [ -f "scan-results/backend-trivy-results/backend-trivy-results.sarif" ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            jq -r '
+              .runs[].results | 
+              group_by(.level) | 
+              map({level: .[0].level, count: length}) | 
+              "Container Vulnerabilities:
+              🔴 Critical: \(map(select(.level == "error")) | .[0].count // 0)
+              🟠 High: \(map(select(.level == "warning")) | .[0].count // 0)
+              🟡 Medium: \(map(select(.level == "note")) | .[0].count // 0)"
+            ' scan-results/backend-trivy-results/backend-trivy-results.sarif >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "#### Critical Container Vulnerabilities:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.runs[].results[] | 
+              select(.level == "error" or .level == "warning") |
+              "- [\(.level | ascii_upcase)] \(.message.text)
+                  ↳ Component: \(.locations[0].physicalLocation.artifactLocation.uri // "Not specified")"
+            ' scan-results/backend-trivy-results/backend-trivy-results.sarif | head -n 10 >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Summary Section
           echo "## 📊 Overall Security Summary" >> $GITHUB_STEP_SUMMARY
-          ./generate-summary.sh
-
+          echo "### Frontend Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "- Snyk Dependencies: $([ -f "scan-results/frontend-snyk-results/frontend-snyk.json" ] && jq '.vulnerabilities | length' scan-results/frontend-snyk-results/frontend-snyk.json || echo "N/A")" >> $GITHUB_STEP_SUMMARY
+          echo "- Semgrep Findings: $([ -f "scan-results/frontend-semgrep-results/frontend-semgrep.sarif" ] && jq '.runs[].results | length' scan-results/frontend-semgrep-results/frontend-semgrep.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Container Issues: $([ -f "scan-results/frontend-trivy-results/frontend-trivy-results.sarif" ] && jq '.runs[].results | length' scan-results/frontend-trivy-results/frontend-trivy-results.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
           
+          echo "### Backend Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "- Snyk Dependencies: $([ -f "scan-results/backend-snyk-results/backend-snyk.json" ] && jq '.vulnerabilities | length' scan-results/backend-snyk-results/backend-snyk.json || echo "N/A")" >> $GITHUB_STEP_SUMMARY
+          echo "- Semgrep Findings: $([ -f "scan-results/backend-semgrep-results/backend-semgrep.sarif" ] && jq '.runs[].results | length' scan-results/backend-semgrep-results/backend-semgrep.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Container Issues: $([ -f "scan-results/backend-trivy-results/backend-trivy-results.sarif" ] && jq '.runs[].results | length' scan-results/backend-trivy-results/backend-trivy-results.sarif || echo "N/A")" >> $GITHUB_STEP_SUMMARY
 
- 
-
- 
+          echo "## 🎯 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review and address critical vulnerabilities" >> $GITHUB_STEP_SUMMARY
+          echo "2. Update dependencies with known security issues" >> $GITHUB_STEP_SUMMARY
+          echo "3. Implement recommended security fixes from static analysis" >> $GITHUB_STEP_SUMMARY
+          echo "4. Review and update container security policies" >>
 
