@@ -159,6 +159,7 @@ jobs:
           path: ${{ matrix.component }}-trivy-results.sarif
           retention-days: 5
 
+  
   deploy:
     needs: security-and-build
     runs-on: ubuntu-latest
@@ -209,17 +210,17 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy with Helm
-        working-directory: MY-BACKEND/mern-app
+        working-directory: MY-BACKEND/mern-app/helm  # Updated path to match repository structure
         run: |
           # Update values with current image tags
-          sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" helm/values.yaml
+          sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" values.yaml
           
           # Update image tags
-          yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" helm/values.yaml
-          yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" helm/values.yaml
+          yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
+          yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
           
-          # Install/Upgrade Helm chart
-          helm upgrade --install mern-app ./helm \
+          # Install/Upgrade Helm chart from parent directory
+          helm upgrade --install mern-app . \
             --namespace default \
             --create-namespace \
             --wait \
