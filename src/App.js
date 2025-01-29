@@ -4,8 +4,7 @@ import './App.css';
 
 // Support multiple API URLs for failover
 const API_URLS = [
-  'http://34.100.172.207:5000/api',
-  'http://34.93.14.21/api'
+  'http://jc1.awsaparna123.xyz'
 ];
 
 function App() {
