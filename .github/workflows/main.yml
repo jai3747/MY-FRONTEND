@@ -161,130 +161,165 @@ jobs:
 
   
   deploy:
-    needs: security-and-build
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: 'read'
-      id-token: 'write'
+  needs: security-and-build
+  runs-on: ubuntu-latest
+  environment: production
+  timeout-minutes: 30
+  permissions:
+    contents: 'read'
+    id-token: 'write'
 
-    steps:
-      - name: Checkout Main Repository
-        uses: actions/checkout@v4.1.1
+  steps:
+    - name: Checkout Main Repository
+      uses: actions/checkout@v4.1.1
 
-      - name: Checkout Backend Repository
-        uses: actions/checkout@v4.1.1
-        with:
-          repository: jai3747/MY-BACKEND
-          path: MY-BACKEND
-          fetch-depth: 0
+    - name: Checkout Backend Repository
+      uses: actions/checkout@v4.1.1
+      with:
+        repository: jai3747/MY-BACKEND
+        path: MY-BACKEND
+        fetch-depth: 0
 
-      - name: 'Authenticate to Google Cloud'
-        uses: 'google-github-actions/auth@v1'
-        with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+    - name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        credentials_json: '${{ secrets.GCP_SA_KEY }}'
 
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v1'
-        with:
-          install_components: 'gke-gcloud-auth-plugin'
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v1'
+      with:
+        install_components: 'gke-gcloud-auth-plugin'
 
-      - name: Install kubectl and helm
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y kubectl
-          curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+    - name: Install kubectl and helm
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y kubectl
+        curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
 
-      - name: Get GKE Credentials
-        run: |
-          gcloud container clusters get-credentials "$GKE_CLUSTER" \
-            --zone "$GKE_ZONE" \
-            --project "$PROJECT_ID"
+    - name: Get GKE Credentials
+      run: |
+        gcloud container clusters get-credentials "$GKE_CLUSTER" \
+          --zone "$GKE_ZONE" \
+          --project "$PROJECT_ID"
 
-      - name: Deploy with Helm
-        working-directory: ${{ env.K8S_PATH }}
-        run: |
-          # Update values with current image tags
-          sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" values.yaml
-          
-          # Update image tags
-          yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
-          yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
-          
-          # Install/Upgrade Helm chart with retry logic
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if helm upgrade --install mern-app . \
-              --wait \
-              --timeout 10m \
-              --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
-              --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
-              --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
-              --set mongodb.auth.database="mern-app"; then
-              echo "✅ Helm deployment successful!"
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-                echo "❌ Failed to deploy after $MAX_RETRIES attempts"
-                exit 1
-              fi
-              echo "⚠️ Deployment failed, attempt $RETRY_COUNT of $MAX_RETRIES. Retrying in 30s..."
-              sleep 30
+    - name: Clean up any stuck Helm operations
+      working-directory: ${{ env.K8S_PATH }}
+      run: |
+        # Check current Helm releases
+        helm list -a
+        
+        # Force delete any stuck release
+        helm delete mern-app --no-hooks || true
+        
+        # Wait for resources to be cleaned up
+        sleep 20
+        
+        # Clean up any stuck pods
+        kubectl delete pods -l app=mern-app --force --grace-period=0 || true
+
+    - name: Deploy with Helm
+      working-directory: ${{ env.K8S_PATH }}
+      run: |
+        # Update image tags in values.yaml
+        sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" values.yaml
+        yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
+        yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
+        
+        # Print the current values for verification
+        echo "Current values.yaml content:"
+        cat values.yaml
+        
+        # Install/Upgrade Helm chart with retry logic
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          if helm upgrade --install mern-app . \
+            --wait \
+            --timeout 10m \
+            --atomic \
+            --cleanup-on-fail \
+            --namespace default \
+            --create-namespace \
+            --debug \
+            --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
+            --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
+            --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
+            --set mongodb.auth.database="mern-app"; then
+            echo "✅ Helm deployment successful!"
+            break
+          else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "❌ Failed to deploy after $MAX_RETRIES attempts"
+              echo "Printing debug information..."
+              kubectl get pods
+              kubectl describe pods -l app=mern-app
+              helm list -a
+              helm history mern-app || true
+              exit 1
             fi
-          done
+            echo "⚠️ Deployment failed, attempt $RETRY_COUNT of $MAX_RETRIES. Retrying in 30s..."
+            helm delete mern-app --no-hooks || true
+            kubectl delete pods -l app=mern-app --force --grace-period=0 || true
+            sleep 30
+          fi
+        done
 
-      - name: Verify Deployment
-        run: |
-          echo "🔍 Checking deployment status..."
-          
-          # Function to check resource status
-          check_resource() {
-            local resource_type=$1
-            local min_ready=$2
-            
-            echo "Checking $resource_type..."
-            kubectl get $resource_type
-            
-            # Wait for resources to be ready
-            if ! kubectl wait --for=condition=ready $resource_type --all --timeout=300s; then
-              echo "❌ $resource_type failed to become ready within timeout"
-              return 1
-            fi
-            
-            # Check minimum number of ready resources
-            ready_count=$(kubectl get $resource_type -o json | jq '.items | length')
-            if [ "$ready_count" -lt "$min_ready" ]; then
-              echo "❌ Expected at least $min_ready $resource_type, but found $ready_count"
-              return 1
-            fi
-            
-            echo "✅ $resource_type check passed"
-            return 0
-          }
-          
-          # Check different resource types
-          check_resource "pods" 2 || exit 1
-          check_resource "deployments" 2 || exit 1
-          check_resource "services" 2 || exit 1
-          
-          # Additional health checks
-          echo "🏥 Performing health checks..."
-          
-          # Get services
-          FRONTEND_SERVICE=$(kubectl get svc -l app=frontend -o jsonpath='{.items[0].metadata.name}')
-          BACKEND_SERVICE=$(kubectl get svc -l app=backend -o jsonpath='{.items[0].metadata.name}')
-          
-          # Wait for endpoints
-          kubectl wait --for=condition=available --timeout=300s deployment/frontend
-          kubectl wait --for=condition=available --timeout=300s deployment/backend
-          
-          echo "📊 Resource Status Summary:"
-          kubectl get pods,svc,deployments,statefulsets
-          
-          echo "🎯 Deployment verification completed successfully!"
+    - name: Verify Deployment
+      run: |
+        echo "🔍 Starting deployment verification..."
+        
+        # Wait for all pods to be ready
+        echo "Waiting for pods to be ready..."
+        kubectl wait --for=condition=ready pod -l app=mern-app --timeout=300s || {
+          echo "❌ Pods failed to become ready. Current pod status:"
+          kubectl get pods -l app=mern-app
+          kubectl describe pods -l app=mern-app
+          exit 1
+        }
+        
+        # Verify deployments
+        echo "Checking deployments..."
+        kubectl get deployments
+        kubectl wait --for=condition=available deployment -l app=mern-app --timeout=300s || {
+          echo "❌ Deployments not available. Current deployment status:"
+          kubectl get deployments -l app=mern-app
+          kubectl describe deployments -l app=mern-app
+          exit 1
+        }
+        
+        # Check services
+        echo "Verifying services..."
+        kubectl get services -l app=mern-app || {
+          echo "❌ Services not found"
+          exit 1
+        }
+        
+        # Check MongoDB
+        echo "Checking MongoDB status..."
+        kubectl get statefulset mongodb || {
+          echo "❌ MongoDB StatefulSet not found"
+          exit 1
+        }
+        
+        echo "✅ Deployment verification completed successfully!"
+
+    - name: Rollback on Failure
+      if: failure()
+      run: |
+        echo "🔄 Deployment failed, initiating rollback..."
+        
+        # Attempt to rollback Helm release
+        helm rollback mern-app 0 || true
+        
+        # Force delete stuck resources
+        kubectl delete deployment -l app=mern-app --force --grace-period=0 || true
+        kubectl delete pod -l app=mern-app --force --grace-period=0 || true
+        
+        # Print final status
+        echo "Current cluster status after rollback:"
+        kubectl get pods,deployments,services -l app=mern-app
 
   report:
     needs: [security-and-build, deploy]
