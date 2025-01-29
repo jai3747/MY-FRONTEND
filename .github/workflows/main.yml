@@ -201,9 +201,14 @@ jobs:
             --zone "$GKE_ZONE" \
             --project "$PROJECT_ID"
 
+      - name: Create Namespace
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Create MongoDB Secret
         run: |
           kubectl create secret generic mongodb-secret \
+            --namespace ${{ env.NAMESPACE }} \
             --from-literal=MONGO_URI="${{ secrets.MONGODB_URI }}" \
             --from-literal=MONGO_USERNAME="${{ secrets.MONGO_USERNAME }}" \
             --from-literal=MONGO_PASSWORD="${{ secrets.MONGO_PASSWORD }}" \
@@ -219,18 +224,13 @@ jobs:
           yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
           yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
           
-          # Add helm repo (if needed)
-          # helm repo add bitnami https://charts.bitnami.com/bitnami
-          # helm repo update
-          
           # Install/Upgrade Helm chart with retry logic
           MAX_RETRIES=3
           RETRY_COUNT=0
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             if helm upgrade --install mern-app . \
-              --namespace $NAMESPACE \
-              --create-namespace \
+              --namespace ${{ env.NAMESPACE }} \
               --wait \
               --timeout 10m \
               --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
@@ -260,16 +260,16 @@ jobs:
             local min_ready=$2
             
             echo "Checking $resource_type..."
-            kubectl get $resource_type -n $NAMESPACE
+            kubectl get $resource_type -n ${{ env.NAMESPACE }}
             
             # Wait for resources to be ready
-            if ! kubectl wait --for=condition=ready $resource_type --all -n $NAMESPACE --timeout=300s; then
+            if ! kubectl wait --for=condition=ready $resource_type --all -n ${{ env.NAMESPACE }} --timeout=300s; then
               echo "❌ $resource_type failed to become ready within timeout"
               return 1
             fi
             
             # Check minimum number of ready resources
-            ready_count=$(kubectl get $resource_type -n $NAMESPACE -o json | jq '.items | length')
+            ready_count=$(kubectl get $resource_type -n ${{ env.NAMESPACE }} -o json | jq '.items | length')
             if [ "$ready_count" -lt "$min_ready" ]; then
               echo "❌ Expected at least $min_ready $resource_type, but found $ready_count"
               return 1
@@ -288,15 +288,15 @@ jobs:
           echo "🏥 Performing health checks..."
           
           # Get services
-          FRONTEND_SERVICE=$(kubectl get svc -n $NAMESPACE -l app=frontend -o jsonpath='{.items[0].metadata.name}')
-          BACKEND_SERVICE=$(kubectl get svc -n $NAMESPACE -l app=backend -o jsonpath='{.items[0].metadata.name}')
+          FRONTEND_SERVICE=$(kubectl get svc -n ${{ env.NAMESPACE }} -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+          BACKEND_SERVICE=$(kubectl get svc -n ${{ env.NAMESPACE }} -l app=backend -o jsonpath='{.items[0].metadata.name}')
           
           # Wait for endpoints
-          kubectl wait --for=condition=available --timeout=300s deployment/frontend -n $NAMESPACE
-          kubectl wait --for=condition=available --timeout=300s deployment/backend -n $NAMESPACE
+          kubectl wait --for=condition=available --timeout=300s deployment/frontend -n ${{ env.NAMESPACE }}
+          kubectl wait --for=condition=available --timeout=300s deployment/backend -n ${{ env.NAMESPACE }}
           
           echo "📊 Resource Status Summary:"
-          kubectl get pods,svc,deployments,statefulsets -n $NAMESPACE
+          kubectl get pods,svc,deployments,statefulsets -n ${{ env.NAMESPACE }}
           
           echo "🎯 Deployment verification completed successfully!"
 
