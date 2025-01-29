@@ -16,7 +16,7 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   MONGODB_VERSION: '6.0'
   DOCKER_TAG: ${{ github.sha }}
-  K8S_PATH: MY-BACKEND/DEPLOYEMENT/K8/k8.yaml
+  K8S_PATH: MY-BACKEND/mern-app
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -210,7 +210,7 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Deploy with Helm
-        working-directory: MY-BACKEND/mern-app/helm  # Updated path to match repository structure
+        working-directory: MY-BACKEND/mern-app
         run: |
           # Update values with current image tags
           sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" values.yaml
