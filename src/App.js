@@ -5,7 +5,7 @@ import './App.css';
 // Support multiple API URLs for failover
 const API_URLS = [
   'http://jc1.awsaparna123.xyz',
-  'http://jc1.awsaparns123.xyz
+  'http://jc1.awsaparns123.xyz/api
   '
 ];
 
