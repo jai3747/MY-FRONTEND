@@ -219,16 +219,86 @@ jobs:
           yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
           yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
           
-          # Install/Upgrade Helm chart from parent directory
-          helm upgrade --install mern-app . \
-            --namespace default \
-            --create-namespace \
-            --wait \
-            --timeout 10m
+          # Add helm repo (if needed)
+          # helm repo add bitnami https://charts.bitnami.com/bitnami
+          # helm repo update
           
-          # Verify deployment
-          echo "Checking deployment status..."
-          kubectl get pods,svc,deployments,statefulsets
+          # Install/Upgrade Helm chart with retry logic
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if helm upgrade --install mern-app . \
+              --namespace $NAMESPACE \
+              --create-namespace \
+              --wait \
+              --timeout 10m \
+              --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
+              --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
+              --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
+              --set mongodb.auth.database="mern-app"; then
+              echo "✅ Helm deployment successful!"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+                echo "❌ Failed to deploy after $MAX_RETRIES attempts"
+                exit 1
+              fi
+              echo "⚠️ Deployment failed, attempt $RETRY_COUNT of $MAX_RETRIES. Retrying in 30s..."
+              sleep 30
+            fi
+          done
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Checking deployment status..."
+          
+          # Function to check resource status
+          check_resource() {
+            local resource_type=$1
+            local min_ready=$2
+            
+            echo "Checking $resource_type..."
+            kubectl get $resource_type -n $NAMESPACE
+            
+            # Wait for resources to be ready
+            if ! kubectl wait --for=condition=ready $resource_type --all -n $NAMESPACE --timeout=300s; then
+              echo "❌ $resource_type failed to become ready within timeout"
+              return 1
+            fi
+            
+            # Check minimum number of ready resources
+            ready_count=$(kubectl get $resource_type -n $NAMESPACE -o json | jq '.items | length')
+            if [ "$ready_count" -lt "$min_ready" ]; then
+              echo "❌ Expected at least $min_ready $resource_type, but found $ready_count"
+              return 1
+            fi
+            
+            echo "✅ $resource_type check passed"
+            return 0
+          }
+          
+          # Check different resource types
+          check_resource "pods" 2 || exit 1
+          check_resource "deployments" 2 || exit 1
+          check_resource "services" 2 || exit 1
+          
+          # Additional health checks
+          echo "🏥 Performing health checks..."
+          
+          # Get services
+          FRONTEND_SERVICE=$(kubectl get svc -n $NAMESPACE -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+          BACKEND_SERVICE=$(kubectl get svc -n $NAMESPACE -l app=backend -o jsonpath='{.items[0].metadata.name}')
+          
+          # Wait for endpoints
+          kubectl wait --for=condition=available --timeout=300s deployment/frontend -n $NAMESPACE
+          kubectl wait --for=condition=available --timeout=300s deployment/backend -n $NAMESPACE
+          
+          echo "📊 Resource Status Summary:"
+          kubectl get pods,svc,deployments,statefulsets -n $NAMESPACE
+          
+          echo "🎯 Deployment verification completed successfully!"
 
   report:
     needs: [security-and-build, deploy]
