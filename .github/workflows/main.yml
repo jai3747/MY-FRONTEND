@@ -1,3 +1,297 @@
+# # # name: Enhanced Security, Build & Deploy Pipeline
+# # # on:
+# # #   workflow_dispatch:
+# # #   push:
+# # #     branches: [main]
+# # #   pull_request:
+# # #     branches: [main]
+# # #     types: [opened, synchronize, reopened]
+
+# # # env:
+# # #   NODE_OPTIONS: --openssl-legacy-provider
+# # #   NODE_VERSION: '18'
+# # #   DOCKER_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+# # #   GKE_CLUSTER: cluster-1 
+# # #   GKE_ZONE: asia-south1-a
+# # #   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+# # #   MONGODB_VERSION: '6.0'
+# # #   DOCKER_TAG: ${{ github.sha }}
+# # #   K8S_PATH: MY-BACKEND/mern-app
+# # #   NAMESPACE: mern-app
+
+# # # concurrency:
+# # #   group: ${{ github.workflow }}-${{ github.ref }}
+# # #   cancel-in-progress: true
+
+# # # jobs:
+# # #   security-and-build:
+# # #     runs-on: ubuntu-latest
+# # #     strategy:
+# # #       matrix:
+# # #         component: [frontend, backend]
+# # #         task: [trufflehog, semgrep, snyk, checkov, docker]
+# # #       fail-fast: false
+    
+# # #     steps:
+# # #       - name: Checkout Main Repository
+# # #         uses: actions/checkout@v4.1.1
+# # #         with:
+# # #           fetch-depth: 0
+
+# # #       - name: Checkout Component Repository
+# # #         uses: actions/checkout@v4.1.1
+# # #         with:
+# # #           repository: jai3747/MY-${{ matrix.component }}
+# # #           path: MY-${{ matrix.component }}
+# # #           fetch-depth: 0
+
+# # #       # TruffleHog Scan
+# # #       - name: TruffleHog Secret Scan
+# # #         if: matrix.task == 'trufflehog'
+# # #         uses: trufflesecurity/trufflehog@main
+# # #         with:
+# # #           path: MY-${{ matrix.component }}
+# # #           base: ${{ github.event.base_ref }}
+# # #           head: ${{ github.event.ref }}
+# # #           extra_args: --only-verified
+          
+# # #       # Semgrep Analysis
+# # #       - name: Setup Node.js for Semgrep
+# # #         if: matrix.task == 'semgrep'
+# # #         uses: actions/setup-node@v4.0.2
+# # #         with:
+# # #           node-version: ${{ env.NODE_VERSION }}
+# # #           cache: 'npm'
+# # #           cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
+
+# # #       - name: Install Dependencies for Semgrep
+# # #         if: matrix.task == 'semgrep'
+# # #         working-directory: MY-${{ matrix.component }}
+# # #         run: |
+# # #           npm ci || npm install
+# # #           npm audit fix || true
+
+# # #       - name: Run Semgrep Scan
+# # #         if: matrix.task == 'semgrep'
+# # #         uses: semgrep/semgrep-action@v1
+# # #         with:
+# # #           publishToken: ${{ secrets.SEMGREP_TOKEN }}
+# # #           publishDeployment: 1
+# # #           config: >-
+# # #             p/default
+# # #             p/security-audit
+# # #             p/owasp-top-ten
+# # #             p/javascript
+# # #             p/nodejs
+
+# # #       # Snyk Scan
+# # #       - name: Setup Node.js for Snyk
+# # #         if: matrix.task == 'snyk'
+# # #         uses: actions/setup-node@v4.0.2
+# # #         with:
+# # #           node-version: ${{ env.NODE_VERSION }}
+# # #           cache: 'npm'
+# # #           cache-dependency-path: MY-${{ matrix.component }}/package-lock.json
+
+# # #       - name: Install Dependencies for Snyk
+# # #         if: matrix.task == 'snyk'
+# # #         working-directory: MY-${{ matrix.component }}
+# # #         run: |
+# # #           npm ci || npm install
+# # #           npm audit fix || true
+
+# # #       - name: Run Snyk Scan
+# # #         if: matrix.task == 'snyk'
+# # #         working-directory: MY-${{ matrix.component }}
+# # #         run: |
+# # #           npm install -g snyk
+# # #           snyk auth ${{ secrets.SNYK_TOKEN }}
+# # #           snyk test
+# # #           snyk monitor
+# # #         env:
+# # #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+# # #       # Checkov IaC Scan
+# # #       - name: Run Checkov Scan
+# # #         if: matrix.task == 'checkov'
+# # #         uses: bridgecrewio/checkov-action@master
+# # #         with:
+# # #           directory: MY-${{ matrix.component }}
+# # #           quiet: true
+# # #           framework: helm
+# # #           skip_check: CKV_K8S_21,CKV_K8S_35
+# # #           soft_fail: true
+
+# # #       # Docker Build and Trivy Scan
+# # #       - name: Cache Docker layers
+# # #         if: matrix.task == 'docker'
+# # #         uses: actions/cache@v3
+# # #         with:
+# # #           path: /tmp/.buildx-cache
+# # #           key: ${{ runner.os }}-buildx-${{ matrix.component }}-${{ github.sha }}
+# # #           restore-keys: |
+# # #             ${{ runner.os }}-buildx-${{ matrix.component }}-
+
+# # #       - name: Set up Docker Buildx
+# # #         if: matrix.task == 'docker'
+# # #         uses: docker/setup-buildx-action@v3
+
+# # #       - name: Login to DockerHub
+# # #         if: matrix.task == 'docker'
+# # #         uses: docker/login-action@v3
+# # #         with:
+# # #           username: ${{ secrets.DOCKERHUB_USERNAME }}
+# # #           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+# # #       - name: Docker Build and Push
+# # #         if: matrix.task == 'docker'
+# # #         uses: docker/build-push-action@v5
+# # #         with:
+# # #           context: MY-${{ matrix.component }}
+# # #           push: true
+# # #           tags: |
+# # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
+# # #             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:latest
+# # #           cache-from: type=gha
+# # #           cache-to: type=gha,mode=max
+# # #           provenance: false
+# # #           build-args: |
+# # #             NODE_VERSION=${{ env.NODE_VERSION }}
+
+# # #       - name: Run Trivy Scan
+# # #         if: matrix.task == 'docker'
+# # #         uses: aquasecurity/trivy-action@master
+# # #         with:
+# # #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
+# # #           severity: 'HIGH,CRITICAL'
+# # #           timeout: '10m'
+# # #           scanners: 'vuln,secret,config'
+# # #           ignore-unfixed: true
+
+# # #   deploy:
+# # #     needs: security-and-build
+# # #     runs-on: ubuntu-latest
+# # #     environment: production
+# # #     timeout-minutes: 30
+# # #     permissions:
+# # #       contents: 'read'
+# # #       id-token: 'write'
+
+# # #     steps:
+# # #       - name: Checkout Main Repository
+# # #         uses: actions/checkout@v4.1.1
+
+# # #       - name: Checkout Backend Repository
+# # #         uses: actions/checkout@v4.1.1
+# # #         with:
+# # #           repository: jai3747/MY-BACKEND
+# # #           path: MY-BACKEND
+# # #           fetch-depth: 0
+
+# # #       - name: 'Authenticate to Google Cloud'
+# # #         uses: 'google-github-actions/auth@v1'
+# # #         with:
+# # #           credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+# # #       - name: 'Set up Cloud SDK'
+# # #         uses: 'google-github-actions/setup-gcloud@v1'
+# # #         with:
+# # #           install_components: 'gke-gcloud-auth-plugin'
+
+# # #       - name: Install kubectl and helm
+# # #         run: |
+# # #           sudo apt-get update
+# # #           sudo apt-get install -y kubectl
+# # #           curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+
+# # #       - name: Get GKE Credentials
+# # #         run: |
+# # #           gcloud container clusters get-credentials "$GKE_CLUSTER" \
+# # #             --zone "$GKE_ZONE" \
+# # #             --project "$PROJECT_ID"
+
+# # #       - name: Create Namespace and Setup
+# # #         run: |
+# # #           kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+# # #           kubectl config set-context --current --namespace=${{ env.NAMESPACE }}
+
+# # #       - name: Clean up Previous Deployment
+# # #         run: |
+# # #           helm uninstall mern-app -n ${{ env.NAMESPACE }} || true
+# # #           kubectl delete --all pods,services,deployments,configmaps -n ${{ env.NAMESPACE }} --grace-period=0 --force || true
+# # #           sleep 10
+
+# # #       - name: Deploy with Helm
+# # #         working-directory: ${{ env.K8S_PATH }}
+# # #         run: |
+# # #           sed -i "s|\${DOCKER_USERNAME}|$DOCKER_USERNAME|g" values.yaml
+# # #           yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
+# # #           yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
+          
+# # #           MAX_RETRIES=3
+# # #           RETRY_COUNT=0
+          
+# # #           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+# # #             if helm upgrade --install mern-app . \
+# # #               --namespace ${{ env.NAMESPACE }} \
+# # #               --create-namespace \
+# # #               --atomic \
+# # #               --timeout 10m \
+# # #               --set mongodb.auth.rootPassword="${{ secrets.MONGO_PASSWORD }}" \
+# # #               --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
+# # #               --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
+# # #               --set mongodb.auth.database="mern-app" \
+# # #               --wait; then
+# # #               echo "✅ Helm deployment successful!"
+# # #               break
+# # #             else
+# # #               RETRY_COUNT=$((RETRY_COUNT + 1))
+# # #               if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+# # #                 echo "❌ Failed to deploy after $MAX_RETRIES attempts"
+# # #                 kubectl get all -n ${{ env.NAMESPACE }}
+# # #                 kubectl describe pods -n ${{ env.NAMESPACE }}
+# # #                 exit 1
+# # #               fi
+# # #               echo "⚠️ Deployment failed, attempt $RETRY_COUNT of $MAX_RETRIES. Retrying in 30s..."
+# # #               helm uninstall mern-app -n ${{ env.NAMESPACE }} || true
+# # #               kubectl delete --all pods,deployments -n ${{ env.NAMESPACE }} --force --grace-period=0 || true
+# # #               sleep 30
+# # #             fi
+# # #           done
+
+# # #       - name: Verify Deployment
+# # #         run: |
+# # #           echo "🔍 Starting deployment verification..."
+          
+# # #           kubectl wait --for=condition=available deployment --all -n ${{ env.NAMESPACE }} --timeout=5m || {
+# # #             echo "❌ Deployments failed to become ready"
+# # #             kubectl get all -n ${{ env.NAMESPACE }}
+# # #             kubectl describe pods -n ${{ env.NAMESPACE }}
+# # #             exit 1
+# # #           }
+          
+# # #           kubectl get services -n ${{ env.NAMESPACE }} || {
+# # #             echo "❌ Services not found"
+# # #             exit 1
+# # #           }
+          
+# # #           kubectl wait --for=condition=ready pod -l app=mongodb -n ${{ env.NAMESPACE }} --timeout=5m || {
+# # #             echo "❌ MongoDB failed to become ready"
+# # #             kubectl describe pods -l app=mongodb -n ${{ env.NAMESPACE }}
+# # #             exit 1
+# # #           }
+          
+# # #           echo "✅ Deployment verification completed successfully!"
+
+# # #       - name: Rollback on Failure
+# # #         if: failure()
+# # #         run: |
+# # #           echo "🔄 Deployment failed, initiating rollback..."
+# # #           helm rollback mern-app -n ${{ env.NAMESPACE }} || true
+# # #           kubectl delete --all pods,deployments -n ${{ env.NAMESPACE }} --force --grace-period=0 || true
+# # #           echo "Current cluster status after rollback:"
+# # #           kubectl get all -n ${{ env.NAMESPACE }}
+
 # # name: Enhanced Security, Build & Deploy Pipeline
 # # on:
 # #   workflow_dispatch:
@@ -45,17 +339,18 @@
 # #           path: MY-${{ matrix.component }}
 # #           fetch-depth: 0
 
-# #       # TruffleHog Scan
+# #       # TruffleHog Scan with Custom Rules
 # #       - name: TruffleHog Secret Scan
 # #         if: matrix.task == 'trufflehog'
 # #         uses: trufflesecurity/trufflehog@main
+# #         continue-on-error: true
 # #         with:
 # #           path: MY-${{ matrix.component }}
 # #           base: ${{ github.event.base_ref }}
 # #           head: ${{ github.event.ref }}
-# #           extra_args: --only-verified
+# #           extra_args: --only-verified --fail-verified
           
-# #       # Semgrep Analysis
+# #       # Enhanced Semgrep Analysis
 # #       - name: Setup Node.js for Semgrep
 # #         if: matrix.task == 'semgrep'
 # #         uses: actions/setup-node@v4.0.2
@@ -68,12 +363,13 @@
 # #         if: matrix.task == 'semgrep'
 # #         working-directory: MY-${{ matrix.component }}
 # #         run: |
-# #           npm ci || npm install
-# #           npm audit fix || true
+# #           npm ci --audit=false || npm install --no-audit
+# #           npm audit fix --force || true
 
 # #       - name: Run Semgrep Scan
 # #         if: matrix.task == 'semgrep'
 # #         uses: semgrep/semgrep-action@v1
+# #         continue-on-error: true
 # #         with:
 # #           publishToken: ${{ secrets.SEMGREP_TOKEN }}
 # #           publishDeployment: 1
@@ -83,8 +379,8 @@
 # #             p/owasp-top-ten
 # #             p/javascript
 # #             p/nodejs
-
-# #       # Snyk Scan
+          
+# #       # Enhanced Snyk Scan
 # #       - name: Setup Node.js for Snyk
 # #         if: matrix.task == 'snyk'
 # #         uses: actions/setup-node@v4.0.2
@@ -97,32 +393,37 @@
 # #         if: matrix.task == 'snyk'
 # #         working-directory: MY-${{ matrix.component }}
 # #         run: |
-# #           npm ci || npm install
-# #           npm audit fix || true
+# #           npm ci --audit=false || npm install --no-audit
+# #           npm audit fix --force || true
+# #           npm update nth-check@2.1.1 postcss@8.4.31 serialize-javascript@6.0.2 --save
 
 # #       - name: Run Snyk Scan
 # #         if: matrix.task == 'snyk'
+# #         continue-on-error: true
 # #         working-directory: MY-${{ matrix.component }}
 # #         run: |
-# #           npm install -g snyk
+# #           npm install -g snyk@latest
 # #           snyk auth ${{ secrets.SNYK_TOKEN }}
-# #           snyk test
+# #           snyk test --severity-threshold=high || true
 # #           snyk monitor
 # #         env:
 # #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-# #       # Checkov IaC Scan
+# #       # Enhanced Checkov IaC Scan
 # #       - name: Run Checkov Scan
 # #         if: matrix.task == 'checkov'
 # #         uses: bridgecrewio/checkov-action@master
+# #         continue-on-error: true
 # #         with:
 # #           directory: MY-${{ matrix.component }}
 # #           quiet: true
-# #           framework: helm
+# #           framework: all
 # #           skip_check: CKV_K8S_21,CKV_K8S_35
 # #           soft_fail: true
+# #           output_format: cli,sarif
+# #           output_file_path: checkov-results.sarif
 
-# #       # Docker Build and Trivy Scan
+# #       # Enhanced Docker Build and Trivy Scan
 # #       - name: Cache Docker layers
 # #         if: matrix.task == 'docker'
 # #         uses: actions/cache@v3
@@ -157,16 +458,20 @@
 # #           provenance: false
 # #           build-args: |
 # #             NODE_VERSION=${{ env.NODE_VERSION }}
+# #           platforms: linux/amd64
+# #           target: production
 
 # #       - name: Run Trivy Scan
 # #         if: matrix.task == 'docker'
 # #         uses: aquasecurity/trivy-action@master
+# #         continue-on-error: true
 # #         with:
 # #           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
 # #           severity: 'HIGH,CRITICAL'
 # #           timeout: '10m'
 # #           scanners: 'vuln,secret,config'
 # #           ignore-unfixed: true
+# #           exit-code: '1'
 
 # #   deploy:
 # #     needs: security-and-build
@@ -228,6 +533,8 @@
 # #           yq e -i ".frontend.image.tag = \"$GITHUB_SHA\"" values.yaml
 # #           yq e -i ".backend.image.tag = \"$GITHUB_SHA\"" values.yaml
           
+# #           helm dependency update
+          
 # #           MAX_RETRIES=3
 # #           RETRY_COUNT=0
           
@@ -241,6 +548,8 @@
 # #               --set mongodb.auth.username="${{ secrets.MONGO_USERNAME }}" \
 # #               --set mongodb.auth.password="${{ secrets.MONGO_PASSWORD }}" \
 # #               --set mongodb.auth.database="mern-app" \
+# #               --set mongodb.auth.mechanism="SCRAM-SHA-256" \
+# #               --set mongodb.security.tls.enabled=true \
 # #               --wait; then
 # #               echo "✅ Helm deployment successful!"
 # #               break
@@ -291,7 +600,6 @@
 # #           kubectl delete --all pods,deployments -n ${{ env.NAMESPACE }} --force --grace-period=0 || true
 # #           echo "Current cluster status after rollback:"
 # #           kubectl get all -n ${{ env.NAMESPACE }}
-
 # name: Enhanced Security, Build & Deploy Pipeline
 # on:
 #   workflow_dispatch:
@@ -339,7 +647,7 @@
 #           path: MY-${{ matrix.component }}
 #           fetch-depth: 0
 
-#       # TruffleHog Scan with Custom Rules
+#       # TruffleHog Scan
 #       - name: TruffleHog Secret Scan
 #         if: matrix.task == 'trufflehog'
 #         uses: trufflesecurity/trufflehog@main
@@ -348,9 +656,9 @@
 #           path: MY-${{ matrix.component }}
 #           base: ${{ github.event.base_ref }}
 #           head: ${{ github.event.ref }}
-#           extra_args: --only-verified --fail-verified
+#           extra_args: --only-verified
           
-#       # Enhanced Semgrep Analysis
+#       # Semgrep Analysis
 #       - name: Setup Node.js for Semgrep
 #         if: matrix.task == 'semgrep'
 #         uses: actions/setup-node@v4.0.2
@@ -363,7 +671,8 @@
 #         if: matrix.task == 'semgrep'
 #         working-directory: MY-${{ matrix.component }}
 #         run: |
-#           npm ci --audit=false || npm install --no-audit
+#           npm install --package-lock-only
+#           npm ci --ignore-scripts --no-audit || npm install --no-audit
 #           npm audit fix --force || true
 
 #       - name: Run Semgrep Scan
@@ -379,8 +688,8 @@
 #             p/owasp-top-ten
 #             p/javascript
 #             p/nodejs
-          
-#       # Enhanced Snyk Scan
+
+#       # Snyk Scan
 #       - name: Setup Node.js for Snyk
 #         if: matrix.task == 'snyk'
 #         uses: actions/setup-node@v4.0.2
@@ -393,23 +702,23 @@
 #         if: matrix.task == 'snyk'
 #         working-directory: MY-${{ matrix.component }}
 #         run: |
-#           npm ci --audit=false || npm install --no-audit
+#           npm install --package-lock-only
+#           npm ci --ignore-scripts --no-audit || npm install --no-audit
 #           npm audit fix --force || true
-#           npm update nth-check@2.1.1 postcss@8.4.31 serialize-javascript@6.0.2 --save
 
 #       - name: Run Snyk Scan
 #         if: matrix.task == 'snyk'
 #         continue-on-error: true
 #         working-directory: MY-${{ matrix.component }}
 #         run: |
-#           npm install -g snyk@latest
+#           npm install -g snyk
 #           snyk auth ${{ secrets.SNYK_TOKEN }}
 #           snyk test --severity-threshold=high || true
 #           snyk monitor
 #         env:
 #           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-#       # Enhanced Checkov IaC Scan
+#       # Checkov Scan
 #       - name: Run Checkov Scan
 #         if: matrix.task == 'checkov'
 #         uses: bridgecrewio/checkov-action@master
@@ -420,10 +729,8 @@
 #           framework: all
 #           skip_check: CKV_K8S_21,CKV_K8S_35
 #           soft_fail: true
-#           output_format: cli,sarif
-#           output_file_path: checkov-results.sarif
 
-#       # Enhanced Docker Build and Trivy Scan
+#       # Docker Build and Scan
 #       - name: Cache Docker layers
 #         if: matrix.task == 'docker'
 #         uses: actions/cache@v3
@@ -444,6 +751,29 @@
 #           username: ${{ secrets.DOCKERHUB_USERNAME }}
 #           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+#       - name: Create Dockerfile if not exists
+#         if: matrix.task == 'docker'
+#         working-directory: MY-${{ matrix.component }}
+#         run: |
+#           if [ ! -f Dockerfile ]; then
+#             cat > Dockerfile <<EOF
+#             FROM node:${{ env.NODE_VERSION }}-alpine as builder
+#             WORKDIR /app
+#             COPY package*.json ./
+#             RUN npm ci --only=production
+#             COPY . .
+#             RUN npm run build
+
+#             FROM node:${{ env.NODE_VERSION }}-alpine as production
+#             WORKDIR /app
+#             COPY --from=builder /app/dist ./dist
+#             COPY package*.json ./
+#             RUN npm ci --only=production
+#             EXPOSE 3000
+#             CMD ["npm", "start"]
+#             EOF
+#           fi
+
 #       - name: Docker Build and Push
 #         if: matrix.task == 'docker'
 #         uses: docker/build-push-action@v5
@@ -458,7 +788,6 @@
 #           provenance: false
 #           build-args: |
 #             NODE_VERSION=${{ env.NODE_VERSION }}
-#           platforms: linux/amd64
 #           target: production
 
 #       - name: Run Trivy Scan
@@ -471,7 +800,6 @@
 #           timeout: '10m'
 #           scanners: 'vuln,secret,config'
 #           ignore-unfixed: true
-#           exit-code: '1'
 
 #   deploy:
 #     needs: security-and-build
@@ -751,34 +1079,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create Dockerfile if not exists
-        if: matrix.task == 'docker'
-        working-directory: MY-${{ matrix.component }}
-        run: |
-          if [ ! -f Dockerfile ]; then
-            cat > Dockerfile <<EOF
-            FROM node:${{ env.NODE_VERSION }}-alpine as builder
-            WORKDIR /app
-            COPY package*.json ./
-            RUN npm ci --only=production
-            COPY . .
-            RUN npm run build
-
-            FROM node:${{ env.NODE_VERSION }}-alpine as production
-            WORKDIR /app
-            COPY --from=builder /app/dist ./dist
-            COPY package*.json ./
-            RUN npm ci --only=production
-            EXPOSE 3000
-            CMD ["npm", "start"]
-            EOF
-          fi
-
       - name: Docker Build and Push
         if: matrix.task == 'docker'
         uses: docker/build-push-action@v5
         with:
           context: MY-${{ matrix.component }}
+          file: MY-${{ matrix.component }}/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/my-${{ matrix.component }}-app:${{ env.DOCKER_TAG }}
