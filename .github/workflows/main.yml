@@ -1094,7 +1094,7 @@ jobs:
           provenance: false
           build-args: |
             NODE_VERSION=${{ env.NODE_VERSION }}
-          target: production
+         
 
       - name: Run Trivy Scan
         if: matrix.task == 'docker'
