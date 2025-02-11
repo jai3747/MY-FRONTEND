@@ -7,7 +7,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM nginx:1.24-alpine
+FROM nginx:1.27.4-alpine
 # Copy the build output to replace the default nginx contents
 COPY --from=build /app/build /usr/share/nginx/html
 # Copy nginx configuration
